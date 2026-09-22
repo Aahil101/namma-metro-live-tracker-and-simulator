@@ -1,0 +1,11 @@
+# Normalise line endings so the repo is identical on every platform.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.webp binary
+*.zip binary
+
+# Vendored library — keep it out of diffs and language stats.
+public/vendor/** linguist-vendored
+public/data/*.json linguist-generated

@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin · Namma Metro Live</title>
+<meta name="robots" content="noindex, nofollow, noarchive" />
+<meta name="theme-color" content="#0a0d14" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230a0d14'/%3E%3Ccircle cx='16' cy='16' r='7' fill='none' stroke='%234da3ff' stroke-width='3'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="./app.css" />
+<link rel="stylesheet" href="./admin.css" />
+</head>
+<body class="admin-body">
+
+<!-- ───────────────────────────────── login ────────────────────────────────── -->
+<div id="gate" class="gate">
+  <form id="gate-form" class="gate-card" autocomplete="off">
+    <div class="gate-mark">◎</div>
+    <h1>Namma Metro Live</h1>
+    <p class="gate-sub">Private dashboard</p>
+
+    <label class="fb-label" for="gu">Username</label>
+    <input id="gu" class="search gate-input" type="text" autocomplete="username" required />
+
+    <label class="fb-label" for="gp">Password</label>
+    <input id="gp" class="search gate-input" type="password" autocomplete="current-password" required />
+
+    <button id="gate-go" class="btn btn-accent gate-btn" type="submit">Sign in</button>
+    <div id="gate-msg" class="share-msg"></div>
+
+    <p class="gate-note" id="gate-note"></p>
+  </form>
+</div>
+
+<!-- ─────────────────────────────── dashboard ─────────────────────────────── -->
+<div id="dash" class="dash" hidden>
+
+  <header class="adm-top">
+    <div class="adm-brand">
+      <span class="adm-dot"></span>
+      <strong>Namma Metro Live</strong>
+      <span class="adm-tag">admin</span>
+    </div>
+
+    <div class="adm-top-right">
+      <span id="adm-updated" class="adm-updated">—</span>
+      <select id="adm-range" class="adm-select" aria-label="Date range">
+        <option value="1">last 24 h</option>
+        <option value="7">last 7 days</option>
+        <option value="14" selected>last 14 days</option>
+        <option value="30">last 30 days</option>
+        <option value="90">last 90 days</option>
+      </select>
+      <button id="adm-refresh" class="btn btn-sm">refresh</button>
+      <a class="btn btn-sm" href="./index.html">open map</a>
+      <button id="adm-logout" class="btn btn-sm">sign out</button>
+    </div>
+  </header>
+
+  <div id="adm-banner" class="adm-banner" hidden></div>
+
+  <main class="adm-main">
+
+    <!-- headline numbers -->
+    <section class="kpis">
+      <div class="kpi kpi-live">
+        <span class="kpi-k">live right now</span>
+        <span id="kpi-live" class="kpi-v">—</span>
+        <span class="kpi-sub">unique sessions, last 5 min</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-k">views · 24 h</span>
+        <span id="kpi-views24" class="kpi-v">—</span>
+        <span id="kpi-sess24" class="kpi-sub">—</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-k">views · range</span>
+        <span id="kpi-views" class="kpi-v">—</span>
+        <span id="kpi-sess" class="kpi-sub">—</span>
+      </div>
+      <div class="kpi" id="kpi-surge-card">
+        <span class="kpi-k">traffic surge</span>
+        <span id="kpi-surge" class="kpi-v">—</span>
+        <span id="kpi-surge-sub" class="kpi-sub">—</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-k">feedback</span>
+        <span id="kpi-fb" class="kpi-v">—</span>
+        <span id="kpi-fb-sub" class="kpi-sub">—</span>
+      </div>
+    </section>
+
+    <!-- charts -->
+    <section class="adm-grid">
+      <div class="adm-card adm-span2">
+        <div class="adm-card-head"><h2>Views &amp; unique sessions</h2><span id="chart-legend" class="adm-legend"></span></div>
+        <div id="chart-days" class="chart"></div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-head"><h2>By hour of day (IST, 7 d)</h2></div>
+        <div id="chart-hours" class="chart chart-sm"></div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-head"><h2>Devices</h2></div>
+        <div id="list-devices" class="barlist"></div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-head"><h2>Where they came from</h2></div>
+        <div id="list-refs" class="barlist"></div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-head"><h2>Countries</h2></div>
+        <div id="list-countries" class="barlist"></div>
+      </div>
+
+      <div class="adm-card">
+        <div class="adm-card-head"><h2>What people do</h2></div>
+        <div id="list-actions" class="barlist"></div>
+      </div>
+    </section>
+
+    <!-- feedback -->
+    <section class="adm-card">
+      <div class="adm-card-head">
+        <h2>Feedback</h2>
+        <div class="seg" id="fb-filter">
+          <button class="seg-btn is-on" data-f="all">all</button>
+          <button class="seg-btn" data-f="unread">unread</button>
+          <button class="seg-btn" data-f="bug">bugs</button>
+          <button class="seg-btn" data-f="data">timings</button>
+          <button class="seg-btn" data-f="idea">ideas</button>
+        </div>
+      </div>
+      <div id="fb-list" class="fb-list"></div>
+    </section>
+
+  </main>
+</div>
+
+<script type="module" src="./js/admin.js"></script>
+<noscript><p style="color:#fff;padding:2rem;font:16px system-ui">This dashboard needs JavaScript.</p></noscript>
+</body>
+</html>

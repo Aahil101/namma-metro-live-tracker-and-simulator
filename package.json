@@ -1,0 +1,37 @@
+{
+  "name": "namma-metro-live",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Live animated map of every Namma Metro train running in Bengaluru right now — Purple, Green and Yellow lines. No build step, no dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "node tools/serve.mjs 5173",
+    "start": "node tools/serve.mjs 5173",
+    "data": "node tools/build-data.mjs",
+    "data:fetch": "node tools/fetch-gtfs.mjs && node tools/build-data.mjs",
+    "verify": "node tools/verify.mjs",
+    "test": "node tools/test-sim.mjs && node tools/test-api.mjs",
+    "test:sim": "node tools/test-sim.mjs",
+    "test:api": "node tools/test-api.mjs",
+    "test:browser": "node tools/browser-check.mjs",
+    "test:all": "node tools/test-sim.mjs && node tools/test-api.mjs && node tools/browser-check.mjs",
+    "shot": "node tools/screenshot.mjs",
+    "admin:secret": "node tools/hash-password.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "namma-metro",
+    "bengaluru",
+    "bangalore",
+    "metro",
+    "transit",
+    "realtime",
+    "maplibre",
+    "gtfs",
+    "no-build",
+    "vanilla-js"
+  ]
+}

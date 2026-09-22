@@ -1,0 +1,21 @@
+# Raw upstream GTFS feed and scratch output — regenerate with:
+#   node tools/fetch-gtfs.mjs && node tools/build-data.mjs
+_data/
+
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+
+# local editor / tooling
+.vscode/
+.idea/
+.netlify/
+.vercel/
+.wrangler/
+
+# never commit secrets — the admin password lives only in Cloudflare
+.dev.vars
+*.env
+.env*
+!.env.example

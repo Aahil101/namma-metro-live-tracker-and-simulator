@@ -1,0 +1,36 @@
+#==============================================================================
+# Namma Metro Live — optional API
+#
+#   npm i -g wrangler          (or: bunx wrangler ...)
+#   wrangler login
+#   wrangler d1 create namma-metro          # paste the id below
+#   wrangler d1 execute namma-metro --remote --file=./schema.sql
+#   wrangler secret put ADMIN_USER
+#   wrangler secret put ADMIN_PW            # from node ../tools/hash-password.mjs
+#   wrangler secret put SESSION_SECRET
+#   wrangler deploy
+#
+# Optional email forwarding of feedback (Resend free tier):
+#   wrangler secret put RESEND_API_KEY
+#   wrangler secret put MAIL_FROM           # e.g. feedback@yourdomain.dev
+#   wrangler secret put MAIL_TO             # heworld2046@gmail.com
+#==============================================================================
+
+name = "namma-metro-api"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "namma-metro"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+[vars]
+# Comma-separated list of origins allowed to call this API, or "*".
+# Tighten this to your deployed site once you know the URL, e.g.
+#   ALLOWED_ORIGINS = "https://namma-metro-live.pages.dev,http://localhost:5173"
+ALLOWED_ORIGINS = "*"
+
+[observability]
+enabled = true
