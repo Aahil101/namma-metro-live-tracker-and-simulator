@@ -845,25 +845,57 @@ try {
   ok(adm?.gateVisible && adm?.dashHidden, 'the dashboard is gated behind a login');
   ok(adm?.hasPasswordField, 'the password field is type=password');
   ok(/noindex/.test(adm?.robots || ''), 'admin page is noindex', adm?.robots);
-  ok(/No API is configured/i.test(adm?.note || ''), 'gate explains local mode honestly');
+  ok(/cosmetic only/i.test(adm?.note || ''), 'gate admits the local check is not security');
 
-  // the critical security property: no credential material in the client bundle
+  // The property that actually matters: no credential *material* in the bundle.
+  // Documentation may legitimately mention PBKDF2 or ADMIN_PW by name, so look
+  // for the shapes real secrets take rather than for the words.
   const secrets = await cdp.eval(`
-    const urls = ['./js/admin.js', './js/config.js', './js/feedback.js', './js/analytics.js'];
+    const urls = ['./js/admin.js', './js/config.js', './js/feedback.js', './js/analytics.js', './js/main.js'];
     const out = {};
     for (const u of urls) out[u] = await (await fetch(u)).text();
     const all = Object.values(out).join('\\n');
     return {
-      hasPassword: /aahil@1423/.test(all),
-      hasHash: /pbkdf2|ADMIN_PW|SESSION_SECRET/i.test(all),
-      mentionsOwnerEmail: /heworld2046/.test(all),
       bytes: all.length,
+      // the literal password, in any casing
+      hasPassword: /aahil@1423/i.test(all),
+      // the ADMIN_PW secret shape: iterations:saltB64:hashB64
+      hasPwSecret: /\\b\\d{4,7}:[A-Za-z0-9+/]{20,}={0,2}:[A-Za-z0-9+/]{40,}={0,2}/.test(all),
+      // a long base64 blob assigned to something session/secret/key shaped
+      hasLongSecret: /(secret|session|token|key)\\s*[:=]\\s*['"\`][A-Za-z0-9+/]{32,}={0,2}['"\`]/i.test(all),
+      mentionsOwnerEmail: /heworld2046/.test(all),
+      // the cosmetic local digest is expected, and must not be the plaintext
+      localDigest: (all.match(/digest:\\s*'([0-9a-f]{64})'/) || [])[1] || null,
     };
   `);
   console.log(`  scanned ${secrets.bytes} bytes of client JS`);
   ok(!secrets.hasPassword, 'the admin password does not appear anywhere in client JS');
-  ok(!secrets.hasHash, 'no password hash or session secret in client JS');
+  ok(!secrets.hasPwSecret, 'the server PBKDF2 secret is not in client JS');
+  ok(!secrets.hasLongSecret, 'no session secret or long key literal in client JS');
+  ok(!!secrets.localDigest && !/aahil/.test(secrets.localDigest),
+    'the local gate ships only a SHA-256 digest', secrets.localDigest?.slice(0, 16) + '…');
   ok(secrets.mentionsOwnerEmail, 'the mailto fallback address is present (expected, not a secret)');
+
+  // the local gate must reject wrong credentials
+  const badLogin = await cdp.eval(`
+    document.getElementById('gu').value = 'aahil';
+    document.getElementById('gp').value = 'wrong-password-entirely';
+    document.getElementById('gate-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 500));
+    return { dashHidden: document.getElementById('dash').hidden,
+             msg: document.getElementById('gate-msg').textContent };
+  `);
+  ok(badLogin.dashHidden, 'a wrong password does not open the dashboard');
+  ok(/invalid/i.test(badLogin.msg), 'a wrong password reports an error', badLogin.msg);
+
+  const badUser = await cdp.eval(`
+    document.getElementById('gu').value = 'admin';
+    document.getElementById('gp').value = 'aahil@14231423';
+    document.getElementById('gate-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 500));
+    return document.getElementById('dash').hidden;
+  `);
+  ok(badUser, 'a wrong username does not open the dashboard');
 
   // local mode sign-in shows the queued feedback rather than pretending to auth
   const local = await cdp.eval(`

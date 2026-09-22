@@ -13,7 +13,7 @@
  * Charts are hand-rolled SVG. No chart library, no CDN, nothing to audit.
  */
 
-import { API_BASE, OWNER_EMAIL } from './config.js';
+import { API_BASE, OWNER_EMAIL, LOCAL_ADMIN } from './config.js';
 import { initialTheme, applyTheme } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
@@ -70,19 +70,33 @@ function showGateNote() {
     note.innerHTML =
       'No API is configured, so there are no server-side stats to show. ' +
       'Deploy <code>api/</code> and set <code>API_BASE</code> in <code>public/js/config.js</code>. ' +
-      'Until then you can still sign in to read feedback queued in this browser.';
+      'Until then this gate is <strong>cosmetic only</strong> — it is not security, and local mode ' +
+      'shows nothing but feedback queued in this browser.';
   } else {
     note.innerHTML = `Credentials are verified by the Worker at <code>${esc(new URL(API_BASE).host)}</code>. ` +
       'Nothing sensitive is stored in this page.';
   }
 }
 
+/** SHA-256 hex, for the cosmetic local-mode gate only. */
+async function sha256Hex(s) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function signIn(username, password) {
   const msg = $('gate-msg');
 
-  // Local mode: no server to verify against, so be explicit rather than
-  // pretending to authenticate in client-side JavaScript.
+  // Local mode: there is no server to verify against, so this check is
+  // cosmetic — see the comment on LOCAL_ADMIN in config.js. It is safe only
+  // because local mode exposes nothing but this browser's own queued feedback.
   if (!API_BASE) {
+    const digest = await sha256Hex(`${username}:${password}:nml-local-v1`);
+    if (username !== LOCAL_ADMIN.user || digest !== LOCAL_ADMIN.digest) {
+      msg.className = 'share-msg bad';
+      msg.textContent = 'Invalid username or password.';
+      return;
+    }
     msg.className = 'share-msg warn';
     msg.textContent = 'Local mode — showing only feedback queued in this browser.';
     setTimeout(() => enterDashboard(true), 700);
