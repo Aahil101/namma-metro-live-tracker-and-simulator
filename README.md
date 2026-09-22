@@ -11,7 +11,7 @@ codes so you can watch a friend's train.
 No build step · no npm dependencies · no backend required · no API keys
 
 [![dependencies](https://img.shields.io/badge/runtime%20dependencies-0-2ea44f?style=flat-square)](#tech-stack)
-[![tests](https://img.shields.io/badge/tests-293%20passing-2ea44f?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-326%20passing-2ea44f?style=flat-square)](#tests)
 [![build step](https://img.shields.io/badge/build%20step-none-4da3ff?style=flat-square)](#why-no-framework)
 [![payload](https://img.shields.io/badge/payload-1.45%20MB-4da3ff?style=flat-square)](#performance-budget)
 [![data](https://img.shields.io/badge/timetable-BMRCL%20GTFS-8C2877?style=flat-square)](#where-the-data-comes-from)
@@ -388,7 +388,7 @@ tools/
   verify.mjs             data integrity report
   test-sim.mjs           82 engine assertions
   test-api.mjs           51 Worker auth / routing assertions
-  browser-check.mjs      160 end-to-end assertions in real Chrome over CDP
+  browser-check.mjs      154 end-to-end assertions in real Chrome over CDP
   screenshot.mjs         capture the running app
   hash-password.mjs      derive the admin secret
   serve.mjs              static dev server
@@ -427,24 +427,24 @@ every piece of feedback received.
 
 ### An honest note on security
 
-A static site **cannot** authenticate anyone. Any password in client-side JavaScript is
-readable by anyone who opens devtools, and a static site has no server to count visitors
-with. So:
+A static site **cannot** authenticate anyone. Any password, hash or digest in client-side
+JavaScript is readable by everyone who opens devtools — and in a public repository it can be
+cracked offline at leisure. So there is no credential of any kind in this repo.
 
-- **With the API deployed** (the real mode): the password is never in this repository or in
-  any file the browser downloads. It exists only as a PBKDF2-SHA256 derivation in a
-  Cloudflare secret. Login is verified by the Worker, rate limited to 6 attempts per 15
-  minutes, compared in constant time, and returns a 12-hour HMAC-signed token — held in
-  `sessionStorage`, not a cookie, so there is no CSRF surface.
-- **Without the API** (`API_BASE === ''`): `/admin.html` runs in **local mode**. The gate
-  checks your username against a SHA-256 digest in `config.js` so it behaves as you'd
-  expect, but the page says plainly that this is **cosmetic, not security**. That is
-  acceptable only because local mode has nothing to protect: it leaves every traffic tile
-  blank rather than inventing numbers, and shows only feedback queued in *that visitor's
-  own* browser.
+- **With the API deployed** (the only real mode): the username and password exist solely as
+  Cloudflare secrets set with `wrangler secret put`, stored as a PBKDF2-SHA256 derivation.
+  Login is verified by the Worker, rate limited to 6 attempts per 15 minutes, compared in
+  constant time, and returns a 12-hour HMAC-signed token — held in `sessionStorage`, not a
+  cookie, so there is no CSRF surface.
+- **Without the API** (`API_BASE === ''`): `/admin.html` renders **no login form at all**.
+  It shows a short explanation and, at most, the feedback queued in *that visitor's own*
+  browser. A gate that cannot verify anything is theatre, so it isn't there.
 
-`tools/browser-check.mjs` greps the whole client bundle on every run and asserts that the
-plaintext password, the PBKDF2 secret shape, and any long key literal are all absent.
+Enforced automatically, not by discipline. `tools/preflight.mjs` fails the build if any
+plaintext password, PBKDF2 secret, bare hex digest, credential literal, API key or cloud
+token shape appears in the payload — and asserts that the login form ships hidden and that
+`admin.js` contains no client-side hashing at all. `tools/browser-check.mjs` re-checks the
+same properties against everything the browser actually downloads. Both run in CI.
 
 ### Privacy
 
@@ -499,12 +499,13 @@ Tighten `ALLOWED_ORIGINS` in `wrangler.toml` to your site's origin once you know
 
 ## Tests
 
-293 assertions, no test framework, nothing to install.
+326 assertions, no test framework, nothing to install.
 
 ```bash
 node tools/test-sim.mjs        #  82  engine: geometry, continuity, boards, share codes
 node tools/test-api.mjs        #  51  Worker: PBKDF2, tokens, routing, input clamping
-node tools/browser-check.mjs   # 160  end-to-end in real headless Chrome
+node tools/preflight.mjs       #  39  deploy readiness + secret scan
+node tools/browser-check.mjs   # 154  end-to-end in real headless Chrome
 node tools/verify.mjs          #      data integrity report
 ```
 

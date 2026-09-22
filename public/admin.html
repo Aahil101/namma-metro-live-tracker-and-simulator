@@ -14,7 +14,10 @@
 
 <!-- ───────────────────────────────── login ────────────────────────────────── -->
 <div id="gate" class="gate">
-  <form id="gate-form" class="gate-card" autocomplete="off">
+
+  <!-- shown only when an API is configured; otherwise there is nothing to
+       authenticate against and no credential is present in this page -->
+  <form id="gate-form" class="gate-card" autocomplete="off" hidden>
     <div class="gate-mark">◎</div>
     <h1>Namma Metro Live</h1>
     <p class="gate-sub">Private dashboard</p>
@@ -30,6 +33,29 @@
 
     <p class="gate-note" id="gate-note"></p>
   </form>
+
+  <!-- shown when API_BASE is empty -->
+  <div id="gate-noapi" class="gate-card" hidden>
+    <div class="gate-mark">◎</div>
+    <h1>Dashboard not available</h1>
+    <p class="gate-sub">No backend is configured</p>
+
+    <p class="noapi-body">
+      A static site cannot count its own visitors and has no way to verify a password —
+      anything in the JavaScript you just downloaded is readable by everyone. So there is
+      deliberately <strong>no login here and no credential in this page</strong>.
+    </p>
+    <p class="noapi-body">
+      To use this dashboard, deploy the Cloudflare Worker in <code>api/</code> and set
+      <code>API_BASE</code> in <code>public/js/config.js</code>. Login is then verified
+      server-side against Cloudflare secrets. Setup takes about five commands —
+      see <code>api/README.md</code>.
+    </p>
+
+    <div id="local-queue" class="noapi-queue"></div>
+
+    <a class="btn btn-accent gate-btn" href="./index.html">open the map</a>
+  </div>
 </div>
 
 <!-- ─────────────────────────────── dashboard ─────────────────────────────── -->

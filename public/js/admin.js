@@ -13,7 +13,7 @@
  * Charts are hand-rolled SVG. No chart library, no CDN, nothing to audit.
  */
 
-import { API_BASE, OWNER_EMAIL, LOCAL_ADMIN } from './config.js';
+import { API_BASE, OWNER_EMAIL } from './config.js';
 import { initialTheme, applyTheme } from './theme.js';
 
 const $ = (id) => document.getElementById(id);
@@ -64,44 +64,51 @@ async function api(path, { method = 'GET', body, auth = true } = {}) {
  *  Gate
  * ------------------------------------------------------------------ */
 
-function showGateNote() {
-  const note = $('gate-note');
-  if (!API_BASE) {
-    note.innerHTML =
-      'No API is configured, so there are no server-side stats to show. ' +
-      'Deploy <code>api/</code> and set <code>API_BASE</code> in <code>public/js/config.js</code>. ' +
-      'Until then this gate is <strong>cosmetic only</strong> — it is not security, and local mode ' +
-      'shows nothing but feedback queued in this browser.';
+/**
+ * Decide which face the gate shows. With no API there is no server to verify a
+ * password against, so no login form is rendered and no credential — not even a
+ * username — exists anywhere in this page. Pretending otherwise in client-side
+ * JavaScript would be security theatre in a public repository.
+ */
+function showGate() {
+  const hasApi = Boolean(API_BASE);
+  $('gate-form').hidden = !hasApi;
+  $('gate-noapi').hidden = hasApi;
+
+  if (hasApi) {
+    $('gate-note').innerHTML =
+      `Credentials are verified by the Worker at <code>${esc(new URL(API_BASE).host)}</code>. ` +
+      'Nothing authentication-related is stored in this page.';
   } else {
-    note.innerHTML = `Credentials are verified by the Worker at <code>${esc(new URL(API_BASE).host)}</code>. ` +
-      'Nothing sensitive is stored in this page.';
+    renderLocalQueue();
   }
 }
 
-/** SHA-256 hex, for the cosmetic local-mode gate only. */
-async function sha256Hex(s) {
-  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+/** The only thing a browser can legitimately show without a backend: its own queue. */
+function renderLocalQueue() {
+  let queue = [];
+  try { queue = JSON.parse(localStorage.getItem('nml.fb.queue') || '[]'); } catch { /* ignore */ }
+  const host = $('local-queue');
+
+  if (!queue.length) {
+    host.innerHTML = `<div class="nq-empty">
+      No feedback is queued in this browser. Messages sent from the map are stored
+      locally until the API exists, then uploaded automatically.<br><br>
+      Direct email always works: <a href="mailto:${OWNER_EMAIL}">${OWNER_EMAIL}</a>
+    </div>`;
+    return;
+  }
+
+  host.innerHTML = `<div class="nq-head">queued in this browser (${queue.length})</div>` +
+    queue.slice(-8).reverse().map((q) => `
+      <div class="nq-item">
+        <span class="nq-kind">${esc(q.kind || 'idea')}</span>${esc(String(q.message || '').slice(0, 220))}
+      </div>`).join('');
 }
 
 async function signIn(username, password) {
   const msg = $('gate-msg');
-
-  // Local mode: there is no server to verify against, so this check is
-  // cosmetic — see the comment on LOCAL_ADMIN in config.js. It is safe only
-  // because local mode exposes nothing but this browser's own queued feedback.
-  if (!API_BASE) {
-    const digest = await sha256Hex(`${username}:${password}:nml-local-v1`);
-    if (username !== LOCAL_ADMIN.user || digest !== LOCAL_ADMIN.digest) {
-      msg.className = 'share-msg bad';
-      msg.textContent = 'Invalid username or password.';
-      return;
-    }
-    msg.className = 'share-msg warn';
-    msg.textContent = 'Local mode — showing only feedback queued in this browser.';
-    setTimeout(() => enterDashboard(true), 700);
-    return;
-  }
+  if (!API_BASE) return;   // no form is rendered in this case
 
   msg.className = 'share-msg';
   msg.textContent = 'Checking…';
@@ -115,7 +122,7 @@ async function signIn(username, password) {
     try { sessionStorage.setItem(TOKEN_KEY, token); } catch { /* private mode */ }
     msg.className = 'share-msg ok';
     msg.textContent = 'Welcome back.';
-    enterDashboard(false);
+    enterDashboard();
   } catch (err) {
     msg.className = 'share-msg bad';
     msg.textContent = err.message === 'Failed to fetch'
@@ -132,29 +139,18 @@ function signOut(reason) {
   clearInterval(refreshTimer);
   $('dash').hidden = true;
   $('gate').hidden = false;
+  showGate();
   if (reason) {
     $('gate-msg').className = 'share-msg warn';
     $('gate-msg').textContent = reason;
   }
 }
 
-function enterDashboard(localMode) {
+/** Only ever reached with a server-issued token. */
+function enterDashboard() {
   $('gate').hidden = true;
   $('dash').hidden = false;
-
-  const banner = $('adm-banner');
-  if (localMode) {
-    banner.hidden = false;
-    banner.innerHTML =
-      '<strong>Local mode.</strong> A static site cannot count its own visitors — there is no server ' +
-      'to record them. Traffic numbers stay empty until you deploy <code>api/</code> (Cloudflare Worker + D1, ' +
-      'free tier) and point <code>API_BASE</code> at it. Feedback below is whatever this browser queued offline.';
-    renderLocalFeedback();
-    renderStats(null);
-    return;
-  }
-
-  banner.hidden = true;
+  $('adm-banner').hidden = true;
   refresh();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(refresh, REFRESH_MS);
@@ -375,30 +371,6 @@ function renderFeedback() {
   }).join('');
 }
 
-function renderLocalFeedback() {
-  let queue = [];
-  try { queue = JSON.parse(localStorage.getItem('nml.fb.queue') || '[]'); } catch { /* ignore */ }
-  currentFeedback = queue.map((q, idx) => ({
-    id: `local-${idx + 1}`,
-    ts: Math.floor(new Date(q.at || Date.now()).getTime() / 1000),
-    kind: q.kind || 'idea',
-    message: q.message || '',
-    contact: q.contact || null,
-    context: q.context || {},
-    country: null,
-    is_read: 0,
-    emailed: 0,
-  }));
-  renderFeedback();
-  if (!currentFeedback.length) {
-    $('fb-list').innerHTML = `<div class="fb-empty">
-      No feedback queued in this browser.<br>
-      Once the API is deployed, everything sent from any device shows up here.<br>
-      Direct email still works: <a href="mailto:${OWNER_EMAIL}">${OWNER_EMAIL}</a>
-    </div>`;
-  }
-}
-
 /* ------------------------------------------------------------------ *
  *  Wiring
  * ------------------------------------------------------------------ */
@@ -448,11 +420,15 @@ document.addEventListener('visibilitychange', () => {
 
 /* ------------------------------ boot ------------------------------ */
 
-showGateNote();
+showGate();
 
 try {
   const saved = sessionStorage.getItem(TOKEN_KEY);
-  if (saved && API_BASE) { token = saved; enterDashboard(false); }
+  if (saved && API_BASE) { token = saved; enterDashboard(); }
 } catch { /* ignore */ }
 
-window.__admin = { api, refresh, renderStats, renderFeedback, signOut, get token() { return token; } };
+window.__admin = {
+  api, refresh, renderStats, renderFeedback, signOut, showGate,
+  hasApi: Boolean(API_BASE),
+  get token() { return token; },
+};

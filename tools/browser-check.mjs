@@ -944,112 +944,76 @@ try {
     if (adm) { admReady = true; break; }
   }
   ok(admReady, 'admin page loads');
-  ok(adm?.gateVisible && adm?.dashHidden, 'the dashboard is gated behind a login');
-  ok(adm?.hasPasswordField, 'the password field is type=password');
+  ok(adm?.gateVisible && adm?.dashHidden, 'the dashboard is gated');
   ok(/noindex/.test(adm?.robots || ''), 'admin page is noindex', adm?.robots);
-  ok(/cosmetic only/i.test(adm?.note || ''), 'gate admits the local check is not security');
 
-  // The property that actually matters: no credential *material* in the bundle.
-  // Documentation may legitimately mention PBKDF2 or ADMIN_PW by name, so look
-  // for the shapes real secrets take rather than for the words.
+  // With no API there must be no login form at all, and no credential anywhere.
+  const gate = await cdp.eval(`
+    const form = document.getElementById('gate-form');
+    const noapi = document.getElementById('gate-noapi');
+    return {
+      hasApi: window.__admin.hasApi,
+      formShown:  getComputedStyle(form).display  !== 'none',
+      noapiShown: getComputedStyle(noapi).display !== 'none',
+      noapiText: noapi.textContent.replace(/\\s+/g, ' ').trim(),
+      pwFields: document.querySelectorAll('input[type=password]').length,
+      pwVisible: [...document.querySelectorAll('input[type=password]')]
+        .filter(i => i.offsetParent !== null).length,
+    };
+  `);
+  console.log(`  API configured: ${gate.hasApi}; login form shown: ${gate.formShown}`);
+  ok(gate.hasApi === false, 'test runs in the no-API configuration');
+  ok(!gate.formShown, 'no login form is rendered without a backend');
+  ok(gate.noapiShown, 'an explanation card is shown instead');
+  ok(gate.pwVisible === 0, 'no password field is reachable', `${gate.pwFields} in DOM, ${gate.pwVisible} visible`);
+  ok(/no login here and no credential in this page/i.test(gate.noapiText),
+    'the page states plainly that it holds no credential');
+
+  // The property that matters most now this repo is public: no credential
+  // material of any shape in anything the browser downloads.
   const secrets = await cdp.eval(`
-    const urls = ['./js/admin.js', './js/config.js', './js/feedback.js', './js/analytics.js', './js/main.js'];
+    const urls = ['./js/admin.js', './js/config.js', './js/feedback.js', './js/analytics.js',
+                  './js/main.js', './js/ui.js', './admin.html', './index.html'];
     const out = {};
     for (const u of urls) out[u] = await (await fetch(u)).text();
     const all = Object.values(out).join('\\n');
     return {
       bytes: all.length,
-      // the literal password, in any casing
-      hasPassword: /aahil@1423/i.test(all),
-      // the ADMIN_PW secret shape: iterations:saltB64:hashB64
-      hasPwSecret: /\\b\\d{4,7}:[A-Za-z0-9+/]{20,}={0,2}:[A-Za-z0-9+/]{40,}={0,2}/.test(all),
-      // a long base64 blob assigned to something session/secret/key shaped
-      hasLongSecret: /(secret|session|token|key)\\s*[:=]\\s*['"\`][A-Za-z0-9+/]{32,}={0,2}['"\`]/i.test(all),
-      mentionsOwnerEmail: /heworld2046/.test(all),
-      // the cosmetic local digest is expected, and must not be the plaintext
-      localDigest: (all.match(/digest:\\s*'([0-9a-f]{64})'/) || [])[1] || null,
+      plaintextPw:  /aahil@1423/i.test(all),
+      adminUser:    /LOCAL_ADMIN|\\badmin_user\\b/i.test(all),
+      anyHexDigest: /(digest|hash|pw|pass|key|sig)\\w*\\s*[:=]\\s*['"\`][0-9a-f]{32,}['"\`]/i.test(all),
+      pbkdf2Secret: /\\b\\d{4,7}:[A-Za-z0-9+/]{20,}={0,2}:[A-Za-z0-9+/]{40,}={0,2}/.test(all),
+      clientHashing: /crypto\\.subtle\\.digest|createHash/i.test(all),
+      ownerEmail:   /heworld2046/.test(all),
     };
   `);
-  console.log(`  scanned ${secrets.bytes} bytes of client JS`);
-  ok(!secrets.hasPassword, 'the admin password does not appear anywhere in client JS');
-  ok(!secrets.hasPwSecret, 'the server PBKDF2 secret is not in client JS');
-  ok(!secrets.hasLongSecret, 'no session secret or long key literal in client JS');
-  ok(!!secrets.localDigest && !/aahil/.test(secrets.localDigest),
-    'the local gate ships only a SHA-256 digest', secrets.localDigest?.slice(0, 16) + '…');
-  ok(secrets.mentionsOwnerEmail, 'the mailto fallback address is present (expected, not a secret)');
+  console.log(`  scanned ${secrets.bytes} bytes of everything the browser downloads`);
+  ok(!secrets.plaintextPw, 'no plaintext password anywhere in the client');
+  ok(!secrets.adminUser, 'no admin username or credential block in the client');
+  ok(!secrets.anyHexDigest, 'no password digest of any kind in the client');
+  ok(!secrets.pbkdf2Secret, 'no PBKDF2 secret in the client');
+  ok(!secrets.clientHashing, 'the client does no credential hashing at all');
+  ok(secrets.ownerEmail, 'the mailto fallback address is present (expected, not a secret)');
 
-  // the local gate must reject wrong credentials
-  const badLogin = await cdp.eval(`
-    document.getElementById('gu').value = 'aahil';
-    document.getElementById('gp').value = 'wrong-password-entirely';
-    document.getElementById('gate-form').dispatchEvent(new Event('submit', { cancelable: true }));
-    await new Promise(r => setTimeout(r, 500));
-    return { dashHidden: document.getElementById('dash').hidden,
-             msg: document.getElementById('gate-msg').textContent };
-  `);
-  ok(badLogin.dashHidden, 'a wrong password does not open the dashboard');
-  ok(/invalid/i.test(badLogin.msg), 'a wrong password reports an error', badLogin.msg);
-
-  const badUser = await cdp.eval(`
-    document.getElementById('gu').value = 'admin';
-    document.getElementById('gp').value = 'aahil@14231423';
-    document.getElementById('gate-form').dispatchEvent(new Event('submit', { cancelable: true }));
-    await new Promise(r => setTimeout(r, 500));
-    return document.getElementById('dash').hidden;
-  `);
-  ok(badUser, 'a wrong username does not open the dashboard');
-
-  // local mode sign-in shows the queued feedback rather than pretending to auth
-  const local = await cdp.eval(`
+  // the queued-feedback view still works, since that is this browser's own data
+  const queue = await cdp.eval(`
     localStorage.setItem('nml.fb.queue', JSON.stringify([
-      { kind: 'bug', message: 'Test report one', contact: '', context: { theme: 'dark' }, at: new Date().toISOString() },
-      { kind: 'idea', message: 'Test idea two', contact: 'x@y.z', context: {}, at: new Date().toISOString() }
+      { kind: 'bug', message: 'Test report one', context: {}, at: new Date().toISOString() },
+      { kind: 'idea', message: 'Test idea two', context: {}, at: new Date().toISOString() }
     ]));
-    document.getElementById('gu').value = 'aahil';
-    document.getElementById('gp').value = 'aahil@14231423';
-    document.getElementById('gate-form').dispatchEvent(new Event('submit', { cancelable: true }));
-    await new Promise(r => setTimeout(r, 1400));
-    return {
-      dashShown: !document.getElementById('dash').hidden,
-      banner: document.getElementById('adm-banner').textContent.trim().slice(0, 120),
-      bannerShown: !document.getElementById('adm-banner').hidden,
-      fbItems: document.querySelectorAll('.fb-item').length,
-      kpis: [...document.querySelectorAll('.kpi-v')].map(e => e.textContent),
-      charts: [...document.querySelectorAll('.chart')].map(e => e.textContent.trim().slice(0, 30)),
-      kinds: [...document.querySelectorAll('.fb-kind-tag')].map(e => e.textContent.trim()),
-    };
+    window.__admin.showGate();
+    const host = document.getElementById('local-queue');
+    return { items: host.querySelectorAll('.nq-item').length, head: host.textContent.slice(0, 60) };
   `);
-  console.log(`  local mode: ${local.fbItems} queued items, KPIs ${JSON.stringify(local.kpis)}`);
-  ok(local.dashShown, 'local mode opens the dashboard');
-  ok(local.bannerShown && /Local mode/i.test(local.banner), 'a banner states it is local mode', local.banner.slice(0, 60));
-  ok(local.fbItems === 2, 'queued feedback is listed', `${local.fbItems}`);
-  ok(local.kinds.includes('bug') && local.kinds.includes('idea'), 'feedback kinds are tagged');
-  ok(local.kpis.every((v) => v === '—'), 'traffic KPIs stay blank rather than showing fake numbers');
-  ok(local.charts.some((c) => /Deploy api|No server-side/i.test(c)), 'charts explain why they are empty');
+  ok(queue.items === 2, "this browser's own queued feedback is still listed", `${queue.items}`);
 
-  // filters and read toggle
-  const inter = await cdp.eval(`
-    document.querySelector('#fb-filter [data-f="bug"]').click();
-    const afterBug = document.querySelectorAll('.fb-item').length;
-    document.querySelector('#fb-filter [data-f="all"]').click();
-    const afterAll = document.querySelectorAll('.fb-item').length;
-    const first = document.querySelector('.fb-item');
-    const wasUnread = first.classList.contains('unread');
-    first.querySelector('[data-act="toggle"]').click();
-    await new Promise(r => setTimeout(r, 200));
-    const nowUnread = document.querySelector('.fb-item').classList.contains('unread');
-    return { afterBug, afterAll, wasUnread, nowUnread };
+  const stillGated = await cdp.eval(`
+    return { dashHidden: document.getElementById('dash').hidden,
+             gateShown: getComputedStyle(document.getElementById('gate')).display !== 'none' };
   `);
-  ok(inter.afterBug === 1 && inter.afterAll === 2, 'kind filter works', `${inter.afterBug} / ${inter.afterAll}`);
-  ok(inter.wasUnread && !inter.nowUnread, 'mark-as-read toggles');
+  ok(stillGated.dashHidden && stillGated.gateShown,
+    'the dashboard stays inaccessible without a server-issued token');
 
-  const signedOut = await cdp.eval(`
-    document.getElementById('adm-logout').click();
-    await new Promise(r => setTimeout(r, 200));
-    return { gate: getComputedStyle(document.getElementById('gate')).display !== 'none',
-             dashHidden: document.getElementById('dash').hidden };
-  `);
-  ok(signedOut.gate && signedOut.dashHidden, 'sign out returns to the gate');
 
   /* -------------------------- console hygiene ------------------------- */
   console.log(`\n── console hygiene ${'─'.repeat(33)}`);

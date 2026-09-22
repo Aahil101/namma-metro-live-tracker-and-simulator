@@ -169,19 +169,36 @@ ok(/publish\s*=\s*"public"/.test(nf), 'netlify publishes ./public');
 section('secrets must not be in the payload');
 
 const secretShapes = [
-  { re: /aahil@1423/i, what: 'the admin password' },
+  { re: /aahil@1423/i, what: 'a known plaintext password' },
   { re: /\b\d{4,7}:[A-Za-z0-9+/]{20,}={0,2}:[A-Za-z0-9+/]{40,}={0,2}/, what: 'a PBKDF2 secret' },
-  { re: /(secret|session|apikey|api_key|token)\s*[:=]\s*['"`][A-Za-z0-9+/_-]{32,}={0,2}['"`]/i, what: 'a long key literal' },
+  { re: /(secret|session|apikey|api_key|token|passwd|password)\s*[:=]\s*['"`][^'"`\s]{8,}['"`]/i, what: 'a credential literal' },
+  // any 32/40/64-hex blob assigned to something — the shape of a bare digest
+  { re: /(digest|hash|pw|pass|key|sig)\w*\s*[:=]\s*['"`][0-9a-f]{32,}['"`]/i, what: 'a password digest' },
+  { re: /\bLOCAL_ADMIN\b/, what: 'a client-side admin credential block' },
   { re: /re_[A-Za-z0-9]{20,}/, what: 'a Resend API key' },
   { re: /gh[pousr]_[A-Za-z0-9]{30,}/, what: 'a GitHub token' },
+  { re: /AKIA[0-9A-Z]{16}/, what: 'an AWS access key' },
 ];
 const leaks = [];
 for (const f of textFiles) {
   const src = fs.readFileSync(f, 'utf8');
-  for (const { re, what } of secretShapes) if (re.test(src)) leaks.push(`${rel(f)}: ${what}`);
+  for (const { re, what } of secretShapes) {
+    const m = src.match(re);
+    if (m) leaks.push(`${rel(f)}: ${what} → ${m[0].slice(0, 40)}`);
+  }
 }
 if (leaks.length) leaks.forEach((l) => console.log(`        ${l}`));
 ok(leaks.length === 0, 'no credential material in the deployable payload');
+
+// the admin page must not ship a login form it cannot honestly verify
+const adminHtml = fs.readFileSync(path.join(PUB, 'admin.html'), 'utf8');
+const adminJs = fs.readFileSync(path.join(PUB, 'js/admin.js'), 'utf8');
+ok(/id="gate-form"[^>]*hidden/.test(adminHtml),
+  'the admin login form is hidden by default (revealed only when an API exists)');
+ok(!/sha256|digest|createHash/i.test(adminJs),
+  'admin.js contains no client-side credential comparison');
+ok(/api\/admin\/login/.test(adminJs),
+  'admin.js authenticates against the server endpoint');
 
 /* ------------------------------------------------------------------ */
 section('API wiring');
