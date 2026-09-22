@@ -68,7 +68,7 @@ Needs **Node 20+**. There is nothing to install — no `npm install`, no lockfil
 
 ```bash
 git clone <your-fork-url> && cd mymetrotracker
-node tools/serve.mjs          # → http://localhost:5173
+node tools/serve.mjs          # -> http://localhost:5173
 ```
 
 That's it. `public/` is already a deployable site.
@@ -133,10 +133,10 @@ would be absurd. `tools/build-data.mjs` notices that thousands of trips share a 
 distinct *(stopping pattern + relative timings)* signatures and deduplicates them:
 
 ```
-3,279 trips  ──▶  19 stopping patterns
+3,279 trips  -->  19 stopping patterns
                   each trip becomes [patternIndex, departureSecond]
 
-5.4 MB stop_times.txt  ──▶  48 KB schedule.json     (112× smaller)
+5.4 MB stop_times.txt  -->  48 KB schedule.json     (112x smaller)
 ```
 
 Positions come from `shape_dist_traveled`, which GTFS provides in both `stop_times` and
@@ -209,44 +209,42 @@ The map needs no server. This exists only for durable feedback and traffic stats
 ## System design
 
 ```
-                         ┌──────────────────────────────────────┐
-  BMRCL timetables ──┐   │  BUILD TIME  (node, no deps)         │
-  OpenStreetMap    ──┼──▶│  fetch-gtfs.mjs → build-data.mjs     │
-                         │  5.4 MB GTFS  →  179 KB JSON         │
-                         └──────────────┬───────────────────────┘
-                                        │  committed artefacts
-                                        ▼
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │  BROWSER  (ES modules, no bundler)                                   │
-  │                                                                      │
-  │   clock.js      IST wall clock + GTFS calendar → today's service_id   │
-  │       │                                                              │
-  │       ▼                                                              │
-  │   simulation.js ── the engine ───────────────────────────────────┐   │
-  │       │  trainsAt(t)      active trips via binary search          │   │
-  │       │  resolve()        trapezoidal accel/cruise/brake profile  │   │
-  │       │  boardFor()       station departure boards                │   │
-  │       │  headwayNow()     live headway, peak classification       │   │
-  │       └──────────────┬───────────────────────────────────────────┘   │
-  │                      │  Train[] (lon, lat, bearing, speed, ETA…)     │
-  │         ┌────────────┴────────────┐                                  │
-  │         ▼                         ▼                                  │
-  │   geometry.js              map-view.js          ui.js                │
-  │   km → lon/lat             MapLibre scene       panels, strip map,    │
-  │   + stable bearing         1 GeoJSON source     boards, share dialog  │
-  │                            rewritten per frame  keyed DOM diffing     │
-  │                                                                      │
-  │   theme.js  sharecode.js  analytics.js  feedback.js  config.js        │
-  └───────────────────────────────┬──────────────────────────────────────┘
-                                  │  optional, only for feedback + stats
-                                  ▼
-  ┌──────────────────────────────────────────────────────────────────────┐
-  │  CLOUDFLARE WORKER + D1   (api/)                                     │
-  │   POST /api/event      anonymous view / ping / action beacons        │
-  │   POST /api/feedback    → D1, optional Resend email forward          │
-  │   POST /api/admin/login PBKDF2 verify → 12 h HMAC session token      │
-  │   GET  /api/admin/stats traffic, surges, referrers, countries        │
-  └──────────────────────────────────────────────────────────────────────┘
+  BUILD TIME                                        node, no dependencies
+  ----------------------------------------------------------------------
+    BMRCL timetables --+
+    OpenStreetMap    --+--> fetch-gtfs.mjs --> build-data.mjs
+                             5.4 MB of GTFS       179 KB of JSON
+                                                        |
+                                    committed artefacts |
+                                                        v
+  BROWSER                                        ES modules, no bundler
+  ----------------------------------------------------------------------
+    clock.js            IST wall clock + GTFS calendar
+        |               -> which service_id runs today
+        v
+    simulation.js       THE ENGINE
+        |                 trainsAt(t)    active trips, via binary search
+        |                 resolve()      accel / cruise / brake profile
+        |                 boardFor()     station departure boards
+        |                 headwayNow()   live headway, peak classification
+        |
+        v   Train[]  lon, lat, bearing, speed, ETA, dwell, progress
+        |
+        +--> geometry.js    along-track km -> lon/lat + stable bearing
+        +--> map-view.js    MapLibre scene; 1 GeoJSON source per frame
+        +--> ui.js          panels, strip map, boards, share dialog
+        |
+    theme.js   sharecode.js   analytics.js   feedback.js   visits.js
+        |
+        |   optional - only for feedback and traffic stats
+        v
+  CLOUDFLARE WORKER + D1                                          api/
+  ----------------------------------------------------------------------
+    POST /api/event           anonymous view / ping / action beacons
+    POST /api/feedback        -> D1, optional Resend email forward
+    GET  /api/live            {live, views24} for the "watching" pill
+    POST /api/admin/login     PBKDF2 verify -> 12 h HMAC session token
+    GET  /api/admin/stats     traffic, surges, referrers, countries
 ```
 
 ### Design decisions worth explaining
@@ -289,16 +287,16 @@ Three JSON files, loaded once at boot.
 
 ```
 network.json   118 KB   lines[]     id, name, colour, ordered station ids
-                        stations{}  id → { code, name, lat, lon, lines[] }
-                        shapes{}    id → { coords: [lon,lat,…], dist: [km,…] }
-                                    two flat arrays, not objects — small and
+                        stations{}  id -> { code, name, lat, lon, lines[] }
+                        shapes{}    id -> { coords: [lon,lat,...], dist: [km,...] }
+                                    two flat arrays, not objects -- small and
                                     fast to binary-search
 
 schedule.json   48 KB   patterns[]  19 entries: line, direction, headsign,
                                     stops[], arr[], dep[], dist[], runtime
                                     (offsets in seconds from that run's own
                                     departure, so patterns are reusable)
-                        departures{} service_id → [[patternIdx, startSec], …]
+                        departures{} service_id -> [[patternIdx, startSec], ...]
                                     3,279 trips in 48 KB
                         services[]  GTFS calendar
                         exceptions[] public holidays
@@ -313,27 +311,26 @@ per-train state is stored or mutated anywhere. That is what makes scrubbing, pau
 ### What happens in one frame
 
 ```
-requestAnimationFrame
-  │
-  ├─ istNow()                    Intl → seconds since IST midnight
-  ├─ serviceFor(date)            cached; recomputed only when the date changes
-  │
-  ├─ sim.trainsAt(t, contexts)   binary-search departures for
-  │    └─ resolve() per train      start ∈ (t − maxRuntime, t]
-  │         ├─ locate the current stop pair by binary search on dep[]
-  │         ├─ trapezoidal profile → distance fraction
-  │         ├─ pointAtDistance()  → lon, lat, bearing
-  │         └─ speed, ETA, dwell, progress
-  │
-  ├─ metro.renderTrains()        build ~60 features, one setData()
-  ├─ ui.updateStripLive()        one style.top write
-  │
-  ├─ every 100 ms  → clock, peak badge, headway chips, tracked-train chip
-  └─ every 250 ms  → train list, station board, train panel
+  requestAnimationFrame
+    |
+    +-- istNow()                  Intl -> seconds since IST midnight
+    +-- serviceFor(date)          cached; recomputed only on a date change
+    |
+    +-- sim.trainsAt(t, contexts) binary-search departures for
+    |     |                       start in (t - maxRuntime, t]
+    |     +-- resolve() per train
+    |           |
+    |           +-- locate the current stop pair (binary search on dep[])
+    |           +-- trapezoidal profile -> distance fraction
+    |           +-- pointAtDistance()  -> lon, lat, bearing
+    |           +-- speed, ETA, dwell, progress
+    |
+    +-- metro.renderTrains()      build ~60 features, one setData()
+    +-- ui.updateStripLive()      one style.top write
+    |
+    +-- every 100 ms   clock, peak badge, headway chips, tracked chip
+    +-- every 250 ms   train list, station board, train panel
 ```
-
-Nothing allocates per-train objects outside the frame, and nothing touches the DOM for the
-map — that is entirely MapLibre's buffer upload.
 
 <a name="performance-budget"></a>
 ### Performance budget
@@ -365,13 +362,13 @@ optional feedback/stats Worker, and its write volume is one row per pageview.
 ### File map
 
 ```
-public/                  ← the deployable site; everything below is optional tooling
+public/                  <- the deployable site; everything below is optional tooling
   index.html  app.css
   admin.html  admin.css
   js/
     main.js              bootstrap + rAF loop, real-clock time source
-    simulation.js        timetable → live positions, headways, peak analysis
-    geometry.js          along-track distance → lon/lat + stable bearing
+    simulation.js        timetable -> live positions, headways, peak analysis
+    geometry.js          along-track distance -> lon/lat + stable bearing
     clock.js             IST handling, GTFS calendar resolution
     map-view.js          MapLibre scene; rebuildable for theme swaps
     ui.js                panels, strip map, boards, playback, share, feedback
@@ -381,13 +378,13 @@ public/                  ← the deployable site; everything below is optional t
     feedback.js          submit + offline queue + mailto fallback
     visits.js            local visit history; live-viewer poll when an API exists
     admin.js             dashboard; hand-rolled SVG charts
-    config.js            ← the one file you edit after deploying the API
+    config.js            <- the one file you edit after deploying the API
   data/                  built artefacts, committed (the site needs them)
   vendor/                MapLibre GL JS
 api/                     optional Cloudflare Worker + D1 schema
 tools/
   fetch-gtfs.mjs         download + unzip upstream feed (no dependencies)
-  build-data.mjs         GTFS → compact JSON
+  build-data.mjs         GTFS -> compact JSON
   verify.mjs             data integrity report
   test-sim.mjs           82 engine assertions
   test-api.mjs           51 Worker auth / routing assertions

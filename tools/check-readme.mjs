@@ -61,10 +61,19 @@ if (detectMojibake) {
   ok(false, 'could not load the mojibake detector from audit-encoding.mjs');
 }
 
-// the ASCII diagrams must still be made of box-drawing characters
-const boxChars = ['\u2500', '\u2502', '\u250C', '\u2510', '\u2514', '\u2518', '\u25BC'];
-const boxCount = boxChars.reduce((n, c) => n + (md.split(c).length - 1), 0);
-ok(boxCount > 200, 'architecture diagrams still use box-drawing characters', `${boxCount} glyphs`);
+// the ASCII diagrams must stay pure ASCII. Box-drawing characters inside code
+// fences were corrupted twice by tooling; ASCII cannot be corrupted at all.
+const { countNonAscii } = await import('./asciify-diagrams.mjs').catch(() => ({ countNonAscii: null }));
+if (countNonAscii) {
+  const n = countNonAscii(md);
+  if (n) console.log(`        ${n} non-ASCII char(s) in code fences — run: node tools/asciify-diagrams.mjs`);
+  ok(n === 0, 'every code fence is pure ASCII', n ? `${n} found` : '');
+} else {
+  ok(false, 'could not load the ASCII checker');
+}
+
+const plusCount = (md.match(/\+--/g) || []).length;
+ok(plusCount > 15, 'diagrams are drawn with ASCII connectors', `${plusCount} joints`);
 
 // tables must have a header separator or GitHub renders them as text
 const tableStarts = [...md.matchAll(/^\|[^\n]+\|\s*$/gm)];
