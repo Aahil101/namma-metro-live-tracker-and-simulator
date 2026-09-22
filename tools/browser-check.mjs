@@ -731,59 +731,161 @@ try {
     const m = window.__metro, s = m.state, out = {};
     out.startedLive = s.live;
     m.ui.togglePlay();                       // pause from live
-    out.afterPause = { live: s.live, paused: s.paused, read: document.getElementById('speed-read').textContent,
+    out.afterPause = { live: s.live, paused: s.paused,
+                       notch: document.getElementById('speed-notch').textContent,
+                       mult: document.getElementById('speed-mult').textContent,
                        bodyPaused: document.body.classList.contains('is-paused') };
     const t0 = s.simTime;
     return new Promise(res => setTimeout(() => {
       out.frozen = Math.abs(s.simTime - t0) < 0.5;
       m.ui.togglePlay();                     // resume
-      out.afterResume = { paused: s.paused, read: document.getElementById('speed-read').textContent };
+      out.afterResume = { paused: s.paused, mult: document.getElementById('speed-mult').textContent };
       res(out);
     }, 900));
   `);
   console.log(`  pause → ${JSON.stringify(play.afterPause)}`);
   ok(play.afterPause.paused === true, 'play/pause pauses the simulation');
   ok(play.afterPause.live === false, 'pausing drops out of live mode');
-  ok(play.afterPause.read === 'paused', 'readout says "paused"', play.afterPause.read);
+  ok(play.afterPause.mult === 'paused', 'readout says "paused"', play.afterPause.mult);
   ok(play.afterPause.bodyPaused, 'is-paused class drives the play icon');
   ok(play.frozen, 'the clock does not advance while paused');
   ok(play.afterResume.paused === false, 'pressing again resumes');
 
-  const rates = await cdp.eval(`
-    const m = window.__metro, s = m.state;
-    const seen = [];
-    const read = () => document.getElementById('speed-read').textContent;
-    // walk to the bottom first
-    for (let i = 0; i < 6; i++) m.ui.stepRate(-1);
-    seen.push([s.speed, read(), document.getElementById('btn-slower').disabled]);
-    for (let i = 0; i < 5; i++) { m.ui.stepRate(+1); seen.push([s.speed, read(), document.getElementById('btn-faster').disabled]); }
-    return { seen, live: s.live };
+  // walk the whole ladder from the bottom and record notch + multiplier
+  const ladder = await cdp.eval(`
+    const m = window.__metro;
+    const read = () => ({
+      speed: m.state.speed,
+      notch: document.getElementById('speed-notch').textContent,
+      mult: document.getElementById('speed-mult').textContent,
+      slowerOff: document.getElementById('btn-slower').disabled,
+      fasterOff: document.getElementById('btn-faster').disabled,
+    });
+    for (let i = 0; i < 12; i++) m.ui.stepRate(-1);   // bottom out
+    const seen = [read()];
+    for (let i = 0; i < 12; i++) { m.ui.stepRate(+1); seen.push(read()); }
+    return seen;
   `);
-  console.log(`  rate ladder: ${rates.seen.map((r) => r[1]).join(' → ')}`);
-  const ladder = rates.seen.map((r) => r[0]);
-  ok(ladder[0] === 1 && rates.seen[0][2] === true, 'slower is disabled at 1×');
-  ok(JSON.stringify([...new Set(ladder)]) === JSON.stringify([1, 1.5, 2, 4]),
-    'rate ladder is exactly 1× / 1.5× / 2× / 4×', JSON.stringify([...new Set(ladder)]));
-  ok(rates.seen[rates.seen.length - 1][2] === true, 'faster is disabled at 4×');
-  ok(rates.live === false, 'running faster than real time leaves live mode');
+  const uniq = [...new Map(ladder.map((r) => [r.speed, r])).values()];
+  console.log(`  ladder: ${uniq.map((r) => `${r.notch}=${r.mult}`).join('  ')}`);
 
-  const rateEffect = await cdp.eval(`
-    const m = window.__metro, s = m.state;
-    s.live = false; s.paused = false; s.speed = 4; s.simTime = 12 * 3600;
-    const t0 = s.simTime;
-    return new Promise(res => setTimeout(() => res(s.simTime - t0), 1000));
+  const speeds = uniq.map((r) => r.speed);
+  ok(JSON.stringify(speeds) === JSON.stringify([0.25, 0.5, 1, 1.5, 2, 4, 8, 16, 32]),
+    'ladder is 0.25× … 32× including slow motion', JSON.stringify(speeds));
+  const notches = uniq.map((r) => r.notch);
+  ok(JSON.stringify(notches) === JSON.stringify(['\u22122', '\u22121', '0', '+1', '+2', '+3', '+4', '+5', '+6']),
+    'notches read −2 … 0 … +6', notches.join(' '));
+  ok(uniq.find((r) => r.speed === 1).notch === '0', 'real time is notch 0');
+  ok(uniq.find((r) => r.speed === 0.25).slowerOff, 'slower disables at the bottom of the ladder');
+  ok(uniq.find((r) => r.speed === 32).fasterOff, 'faster disables at the top of the ladder');
+  ok(uniq.find((r) => r.speed === 0.5).mult === '0.5×', 'fractional rates format cleanly',
+    uniq.find((r) => r.speed === 0.5).mult);
+  ok(uniq.find((r) => r.speed === 1.5).mult === '1.5×', '1.5× formats without trailing zeros');
+  ok(uniq.find((r) => r.speed === 32).mult === '32×', 'integer rates have no decimal point');
+
+  // custom speed
+  const custom = await cdp.eval(`
+    const m = window.__metro;
+    m.ui.toggleCustom(true);
+    const openState = { hidden: document.getElementById('speed-custom').hidden,
+                        presets: document.querySelectorAll('.sc-preset').length,
+                        expanded: document.getElementById('speed-read').getAttribute('aria-expanded') };
+    document.getElementById('speed-input').value = '7.5';
+    document.getElementById('sc-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 120));
+    const after = { speed: m.state.speed,
+                    notch: document.getElementById('speed-notch').textContent,
+                    mult: document.getElementById('speed-mult').textContent,
+                    isCustom: document.getElementById('speed-read').classList.contains('is-custom'),
+                    closed: document.getElementById('speed-custom').hidden };
+    // stepping from a custom value must snap to the ladder
+    m.ui.stepRate(+1);  const up = m.state.speed;
+    m.ui.setRate(7.5);
+    m.ui.stepRate(-1);  const down = m.state.speed;
+    // clamping
+    m.ui.setRate(9999); const hi = m.state.speed;
+    m.ui.setRate(0);    const lo = m.state.speed;
+    return { openState, after, up, down, hi, lo };
   `);
-  console.log(`  at 4× the clock advanced ${rateEffect.toFixed(1)} s in 1 s of wall time`);
-  ok(rateEffect > 2.5 && rateEffect < 6, 'the rate multiplier actually scales the clock',
-    `${rateEffect.toFixed(1)}×`);
+  console.log(`  custom 7.5× → notch ${custom.after.notch}, ${custom.after.mult}; step up ${custom.up}×, down ${custom.down}×`);
+  console.log(`  clamping: 9999 → ${custom.hi}×, 0 → ${custom.lo}×`);
+  ok(!custom.openState.hidden, 'the custom speed popover opens');
+  ok(custom.openState.presets === 9, 'popover lists every ladder preset', `${custom.openState.presets}`);
+  ok(custom.openState.expanded === 'true', 'aria-expanded is set');
+  ok(custom.after.speed === 7.5, 'a hand-typed speed is applied', `${custom.after.speed}`);
+  ok(custom.after.mult === '7.5×', 'custom multiplier is displayed', custom.after.mult);
+  ok(custom.after.notch === '~+4', 'custom speeds show an approximate notch', custom.after.notch);
+  ok(custom.after.isCustom, 'the readout is flagged as custom');
+  ok(custom.after.closed, 'submitting closes the popover');
+  ok(custom.up === 8 && custom.down === 4, 'stepping from a custom value snaps to the ladder',
+    `up ${custom.up}, down ${custom.down}`);
+  ok(custom.hi === 240, 'an absurd speed clamps to the maximum', `${custom.hi}`);
+  ok(custom.lo === 0.05, 'zero clamps to the minimum', `${custom.lo}`);
+
+  // keyboard: + / − / 0
+  const keys = await cdp.eval(`
+    const m = window.__metro;
+    const fire = (key) => document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    m.ui.setLive(true);
+    fire('+'); const a = m.state.speed;
+    fire('+'); const b = m.state.speed;
+    fire('-'); const c = m.state.speed;
+    fire('0'); const d = { speed: m.state.speed, live: m.state.live };
+    return { a, b, c, d };
+  `);
+  console.log(`  keys: + → ${keys.a}×, + → ${keys.b}×, − → ${keys.c}×, 0 → ${keys.d.speed}× (live ${keys.d.live})`);
+  ok(keys.a === 1.5 && keys.b === 2, '"+" steps the rate up');
+  ok(keys.c === 1.5, '"−" steps the rate down');
+  ok(keys.d.speed === 1 && keys.d.live === true, '"0" returns to real time and live');
+
+  // the multiplier must actually scale the clock, at both extremes
+  const scaling = await cdp.eval(`
+    const m = window.__metro, s = m.state;
+    const measure = (rate) => new Promise(res => {
+      s.live = false; s.paused = false; s.speed = rate; s.simTime = 12 * 3600;
+      const t0 = s.simTime;
+      setTimeout(() => res((s.simTime - t0)), 1000);
+    });
+    const fast = await measure(32);
+    const slow = await measure(0.25);
+    return { fast, slow };
+  `);
+  console.log(`  32× advanced ${scaling.fast.toFixed(1)} s in 1 s;  0.25× advanced ${scaling.slow.toFixed(2)} s`);
+  ok(scaling.fast > 20 && scaling.fast < 45, '32× advances the clock ~32× real time', `${scaling.fast.toFixed(1)}×`);
+  ok(scaling.slow > 0.1 && scaling.slow < 0.5, '0.25× runs in slow motion', `${scaling.slow.toFixed(2)}×`);
+
+  // trains must still move sanely at the top of the ladder
+  const fastMotion = await cdp.eval(`
+    const m = window.__metro, s = m.state;
+    s.live = false; s.paused = false; s.speed = 32; s.simTime = 18 * 3600;
+    await new Promise(r => setTimeout(r, 400));
+    const before = new Map([...s.trainsById].map(([id, t]) => [id, t.distKm]));
+    await new Promise(r => setTimeout(r, 1000));
+    let moved = 0, bad = 0;
+    for (const [id, t] of s.trainsById) {
+      if (!before.has(id)) continue;
+      const d = t.distKm - before.get(id);
+      if (d > 0.01) moved++;
+      if (d < -0.001) bad++;            // never reverse, even at 32×
+      if (!Number.isFinite(t.lon) || !Number.isFinite(t.lat)) bad++;
+    }
+    s.live = true; s.speed = 1;
+    return { moved, bad, fleet: s.trainsById.size };
+  `);
+  console.log(`  at 32×: ${fastMotion.moved} trains advanced, ${fastMotion.bad} anomalies, fleet ${fastMotion.fleet}`);
+  ok(fastMotion.moved > 10, 'trains still advance at 32×', `${fastMotion.moved}`);
+  ok(fastMotion.bad === 0, 'no reversals or invalid coordinates at 32×');
 
   await cdp.eval(`window.__metro.ui.setLive(true); return 'ok';`);
   const backLive = await cdp.eval(`
     const s = window.__metro.state;
-    return { live: s.live, speed: s.speed, paused: s.paused, read: document.getElementById('speed-read').textContent };
+    return { live: s.live, speed: s.speed, paused: s.paused,
+             notch: document.getElementById('speed-notch').textContent,
+             mult: document.getElementById('speed-mult').textContent };
   `);
   ok(backLive.live && backLive.speed === 1 && !backLive.paused, 'GO LIVE resets rate and unpauses');
-  ok(backLive.read === '1×', 'readout returns to 1×', backLive.read);
+  ok(backLive.notch === '0' && backLive.mult === '1×', 'readout returns to notch 0 / 1×',
+    `${backLive.notch} ${backLive.mult}`);
 
   /* --------------------------- feedback -------------------------------- */
   console.log(`\n── feedback ${'─'.repeat(40)}`);

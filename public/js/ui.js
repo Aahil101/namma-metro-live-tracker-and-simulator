@@ -14,8 +14,61 @@ import { sendFeedback, mailtoLink } from './feedback.js';
 
 const $ = (id) => document.getElementById(id);
 
-/** Playback rates offered by the ‹ / › buttons. */
-export const RATES = [1, 1.5, 2, 4];
+/**
+ * Playback ladder. Index 2 (1×) is real time; everything below it is slow
+ * motion, everything above is fast-forward. The UI reports position on this
+ * ladder as a signed notch — 1× is `0`, 4× is `+3`, 0.25× is `−2` — which is
+ * easier to reason about at a glance than a bare multiplier.
+ */
+export const RATES = [0.25, 0.5, 1, 1.5, 2, 4, 8, 16, 32];
+const BASE = RATES.indexOf(1);
+
+/** Hard limits for a hand-typed speed. */
+export const MIN_RATE = 0.05;
+export const MAX_RATE = 240;
+
+/** Nearest ladder index to an arbitrary speed, measured in log space. */
+function nearestIndex(v) {
+  let best = BASE, bestD = Infinity;
+  RATES.forEach((r, i) => {
+    const d = Math.abs(Math.log(v / r));
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+
+/**
+ * Ladder index to move to for a ±1 step. Works for off-ladder speeds too: a
+ * custom 7.5× stepped up lands on 8×, stepped down lands on 4×.
+ */
+function stepIndex(cur, delta) {
+  if (delta > 0) {
+    const next = RATES.findIndex((r) => r > cur + 1e-9);
+    return next === -1 ? RATES.length - 1 : next;
+  }
+  let prev = -1;
+  for (let i = 0; i < RATES.length; i++) if (RATES[i] < cur - 1e-9) prev = i;
+  return prev === -1 ? 0 : prev;
+}
+
+/** "0.25×", "1×", "1.5×", "7.5×", "32×" */
+export function formatRate(v) {
+  const n = Number(v);
+  const s = Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return `${s}×`;
+}
+
+/**
+ * Signed notch label. Exact ladder values give "+3" / "0" / "−2"; a custom
+ * value gets a "~" so it is clear it sits between notches.
+ */
+export function rateNotch(v) {
+  const exact = RATES.findIndex((r) => Math.abs(r - v) < 1e-9);
+  const idx = exact >= 0 ? exact : nearestIndex(v);
+  const n = idx - BASE;
+  const sign = n > 0 ? '+' : n < 0 ? '\u2212' : '';
+  return `${exact >= 0 ? '' : '~'}${sign}${Math.abs(n)}`;
+}
 
 /** Reconcile a container's children against `items` without a full re-render. */
 function keyedList(container, items, { key, create, update }) {
@@ -136,6 +189,33 @@ export class UI {
     $('btn-slower').addEventListener('click', () => this.stepRate(-1));
     $('btn-faster').addEventListener('click', () => this.stepRate(+1));
 
+    $('speed-read').addEventListener('click', (e) => { e.stopPropagation(); this.toggleCustom(); });
+
+    $('sc-presets').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-v]');
+      if (!b) return;
+      this.setRate(Number(b.dataset.v));
+      this.toggleCustom(false);
+    });
+
+    $('sc-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = Number($('speed-input').value);
+      if (!Number.isFinite(v) || v <= 0) { $('speed-input').select(); return; }
+      this.setRate(v);
+      this.toggleCustom(false);
+    });
+
+    // a wheel over the readout is a natural way to scrub the rate
+    $('speed-read').addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.stepRate(e.deltaY < 0 ? +1 : -1);
+    }, { passive: false });
+
+    document.addEventListener('click', (e) => {
+      if (!$('speed-custom').hidden && !e.target.closest('.playbar')) this.toggleCustom(false);
+    });
+
     /* ---- theme ---- */
     $('btn-theme').addEventListener('click', () => this.toggleTheme());
 
@@ -224,7 +304,8 @@ export class UI {
 
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (!$('fb-modal').hidden) $('fb-modal').hidden = true;
+        if (!$('speed-custom').hidden) this.toggleCustom(false);
+        else if (!$('fb-modal').hidden) $('fb-modal').hidden = true;
         else if (!$('share-modal').hidden) $('share-modal').hidden = true;
         else if (!$('modal').hidden) $('modal').hidden = true;
         else if (!$('train-panel').hidden) this.closeTrain();
@@ -236,8 +317,12 @@ export class UI {
       if (e.key === ' ') { e.preventDefault(); this.togglePlay(); }
       if (e.key === 'ArrowLeft')  { e.preventDefault(); this.nudge(-300); }
       if (e.key === 'ArrowRight') { e.preventDefault(); this.nudge(300); }
-      if (e.key === ',' || e.key === '<') this.stepRate(-1);
-      if (e.key === '.' || e.key === '>') this.stepRate(+1);
+
+      // + / − step the playback rate; , / . are aliases for keyboards where
+      // + needs a modifier
+      if (e.key === '+' || e.key === '=' || e.key === '.' || e.key === '>') this.stepRate(+1);
+      if (e.key === '-' || e.key === '_' || e.key === ',' || e.key === '<') this.stepRate(-1);
+      if (e.key === '0') this.resetRate();
 
       const k = e.key.toLowerCase();
       if (k === 'l') this.setLive(!s.live);
@@ -245,6 +330,7 @@ export class UI {
       if (k === 's') this.openShare();
       if (k === 't') this.toggleTheme();
       if (k === 'f') this.openFeedback();
+      if (k === 'x') this.toggleCustom();
     });
 
     // clicks on the map
@@ -281,17 +367,29 @@ export class UI {
     this._reflectLive();
   }
 
-  /** Move one notch along RATES. Changing rate leaves live mode. */
+  /** Move one notch along the ladder. Leaving 1× leaves live mode. */
   stepRate(delta) {
     const s = this.state;
-    const i = Math.max(0, Math.min(RATES.length - 1, RATES.indexOf(s.speed) + delta));
-    const next = RATES[i];
-    if (next === s.speed && !s.live) return;
-    s.speed = next;
-    if (next !== 1) s.live = false;  // faster than real time can't be live
+    const cur = s.live ? 1 : s.speed;
+    this.setRate(RATES[stepIndex(cur, delta)]);
+  }
+
+  /** Set an exact rate, from the ladder or hand-typed. */
+  setRate(v) {
+    const s = this.state;
+    const n = Number(v);
+    // clamp anything finite (including 0 and negatives) into range; only
+    // genuinely unusable input falls back to real time
+    const rate = Number.isFinite(n) ? Math.min(MAX_RATE, Math.max(MIN_RATE, n)) : 1;
+    s.speed = rate;
     s.paused = false;
+    // only real time can be "live"; anything else is a simulation
+    if (Math.abs(rate - 1) > 1e-9) s.live = false;
     this._reflectLive();
   }
+
+  /** Back to real time and live. */
+  resetRate() { this.setLive(true); }
 
   nudge(deltaSec) {
     const s = this.state;
@@ -300,23 +398,58 @@ export class UI {
     this._reflectLive();
   }
 
+  /* ---- custom speed popover ---- */
+
+  toggleCustom(force) {
+    const pop = $('speed-custom');
+    const open = force !== undefined ? force : pop.hidden;
+    pop.hidden = !open;
+    $('speed-read').setAttribute('aria-expanded', String(open));
+    if (open) {
+      $('speed-input').value = this.state.live ? 1 : this.state.speed;
+      this._renderPresets();
+      setTimeout(() => $('speed-input').select(), 40);
+    }
+  }
+
+  _renderPresets() {
+    const host = $('sc-presets');
+    const cur = this.state.live ? 1 : this.state.speed;
+    host.innerHTML = RATES.map((r) => {
+      const on = Math.abs(r - cur) < 1e-9 ? ' is-on' : '';
+      return `<button type="button" class="sc-preset${on}" data-v="${r}">${formatRate(r)}</button>`;
+    }).join('');
+  }
+
   _reflectLive() {
     const s = this.state;
     const live = s.live;
+    const rate = live ? 1 : s.speed;
 
     $('btn-live').classList.toggle('is-live', live);
     document.body.classList.toggle('is-live-mode', live);
     document.body.classList.toggle('is-paused', s.paused);
     $('btn-live').querySelector('span:last-child').textContent = live ? 'LIVE' : 'GO LIVE';
 
-    const rate = live ? 1 : s.speed;
-    $('speed-read').textContent = s.paused ? 'paused' : `${rate}×`;
+    $('speed-notch').textContent = rateNotch(rate);
+    $('speed-mult').textContent = s.paused ? 'paused' : formatRate(rate);
+
+    const read = $('speed-read');
+    const exact = RATES.some((r) => Math.abs(r - rate) < 1e-9);
+    read.classList.toggle('is-custom', !exact);
+    read.classList.toggle('is-fast', rate > 1 + 1e-9);
+    read.classList.toggle('is-slow', rate < 1 - 1e-9);
+    read.title = exact
+      ? `${formatRate(rate)} — click for a custom speed`
+      : `custom ${formatRate(rate)} — click to change`;
+
+    $('btn-slower').disabled = rate <= RATES[0] + 1e-9;
+    $('btn-faster').disabled = rate >= RATES[RATES.length - 1] - 1e-9;
+
     $('btn-play').setAttribute('aria-pressed', String(!s.paused));
     $('btn-play').title = s.paused ? 'Play (Space)' : 'Pause (Space)';
 
-    const i = RATES.indexOf(rate);
-    $('btn-slower').disabled = i <= 0;
-    $('btn-faster').disabled = i >= RATES.length - 1;
+    if (!$('speed-custom').hidden) this._renderPresets();
   }
 
   /* ------------------------------------------------------------------ *

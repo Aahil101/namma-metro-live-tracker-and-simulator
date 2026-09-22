@@ -119,13 +119,36 @@
         <svg class="icon-pause" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="6" y="4.5" width="4.2" height="15" rx="1.3" fill="currentColor"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.3" fill="currentColor"/></svg>
         <svg class="icon-play" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M7.5 4.6a1 1 0 0 1 1.5-.86l9.4 6.4a1 1 0 0 1 0 1.72l-9.4 6.4A1 1 0 0 1 7.5 17.4Z"/></svg>
       </button>
-      <button id="btn-slower" class="btn btn-icon btn-rate" title="Slower" aria-label="Slower">
-        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M11.6 5.1a.9.9 0 0 1 1.4.76v12.28a.9.9 0 0 1-1.4.76L4.9 14.1a1.3 1.3 0 0 1 0-2.2Zm8 0a.9.9 0 0 1 1.4.76v12.28a.9.9 0 0 1-1.4.76l-6.7-4.8a1.3 1.3 0 0 1 0-2.2Z"/></svg>
+
+      <button id="btn-slower" class="btn btn-icon btn-rate" title="Slower ( − )" aria-label="Slower">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="5" y="11" width="14" height="2.2" rx="1.1" fill="currentColor"/></svg>
       </button>
-      <span id="speed-read" class="speed-read" aria-live="polite">1×</span>
-      <button id="btn-faster" class="btn btn-icon btn-rate" title="Faster" aria-label="Faster">
-        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M12.4 5.1a.9.9 0 0 0-1.4.76v12.28a.9.9 0 0 0 1.4.76l6.7-4.8a1.3 1.3 0 0 0 0-2.2Zm-8 0A.9.9 0 0 0 3 5.86v12.28a.9.9 0 0 0 1.4.76l6.7-4.8a1.3 1.3 0 0 0 0-2.2Z"/></svg>
+
+      <button id="speed-read" class="speed-read" title="Click to set a custom speed"
+              aria-haspopup="dialog" aria-expanded="false">
+        <span id="speed-notch" class="sr-notch">0</span>
+        <span id="speed-mult" class="sr-mult">1×</span>
       </button>
+
+      <button id="btn-faster" class="btn btn-icon btn-rate" title="Faster ( + )" aria-label="Faster">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M13.1 5a1.1 1.1 0 0 0-2.2 0v5.9H5a1.1 1.1 0 0 0 0 2.2h5.9V19a1.1 1.1 0 0 0 2.2 0v-5.9H19a1.1 1.1 0 0 0 0-2.2h-5.9Z"/></svg>
+      </button>
+
+      <!-- custom speed popover -->
+      <div id="speed-custom" class="speed-custom" role="dialog" aria-label="Custom playback speed" hidden>
+        <div class="sc-head">Playback speed</div>
+        <div class="sc-presets" id="sc-presets"></div>
+        <form class="sc-row" id="sc-form">
+          <input id="speed-input" class="sc-input" type="number" min="0.05" max="240" step="0.05"
+                 inputmode="decimal" aria-label="Custom speed multiplier" />
+          <span class="sc-x">×</span>
+          <button type="submit" class="btn btn-sm btn-accent">set</button>
+        </form>
+        <p class="sc-hint">
+          0.05× – 240×. <kbd>+</kbd> faster, <kbd>−</kbd> slower, <kbd>0</kbd> real time,
+          <kbd>Space</kbd> pause.
+        </p>
+      </div>
     </div>
   </div>
   <div class="tb-bottom">

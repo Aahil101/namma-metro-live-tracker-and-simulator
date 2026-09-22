@@ -36,7 +36,7 @@ need a framework, a bundler, or a node_modules folder.
 | **Tap a station** | the next ~16 arrivals split by direction, counting down |
 | **Share a train** | a code like `MTR-4K7P-2XQ8`, or a link â€” the recipient sees that train ringed and labelled while the rest of the fleet fades back |
 | **Peak / off-peak** | current headway per line, plus a frequency-by-time-of-day table derived from the timetable itself |
-| **Time travel** | play / pause and 1Ã— Â· 1.5Ã— Â· 2Ã— Â· 4Ã— playback across the whole service day |
+| **Time travel** | play / pause, slow motion to 0.25×, fast-forward to 32×, or any custom rate up to 240× — displayed as a signed notch (`−2` … `0` … `+6`) beside the multiplier |
 | **Light & dark** | full theme swap including the basemap; line colours darken so the Yellow Line stays legible on a pale map |
 | **Feedback** | in-app form, stored server-side and optionally emailed, readable from a private dashboard |
 
@@ -243,7 +243,7 @@ tools/
   verify.mjs             data integrity report
   test-sim.mjs           82 engine assertions
   test-api.mjs           51 Worker auth / routing assertions
-  browser-check.mjs      139 end-to-end assertions in real Chrome over CDP
+  browser-check.mjs      160 end-to-end assertions in real Chrome over CDP
   screenshot.mjs         capture the running app
   hash-password.mjs      derive the admin secret
   serve.mjs              static dev server
@@ -354,12 +354,12 @@ Tighten `ALLOWED_ORIGINS` in `wrangler.toml` to your site's origin once you know
 
 ## Tests
 
-272 assertions, no test framework, nothing to install.
+293 assertions, no test framework, nothing to install.
 
 ```bash
 node tools/test-sim.mjs        #  82  engine: geometry, continuity, boards, share codes
 node tools/test-api.mjs        #  51  Worker: PBKDF2, tokens, routing, input clamping
-node tools/browser-check.mjs   # 139  end-to-end in real headless Chrome
+node tools/browser-check.mjs   # 160  end-to-end in real headless Chrome
 node tools/verify.mjs          #      data integrity report
 ```
 
@@ -398,7 +398,9 @@ PASS  a full fleet resolves fast enough for 60 fps   0.04 ms/frame
 |---|---|
 | `Space` | play / pause |
 | `â†` `â†’` | jump 5 minutes |
-| `,` `.` | slower / faster (1Ã— Â· 1.5Ã— Â· 2Ã— Â· 4Ã—) |
+| `+` `−` | faster / slower — steps the ladder 0.25× · 0.5× · 1× · 1.5× · 2× · 4× · 8× · 16× · 32× |
+| `0` | back to real time |
+| `X` | custom speed box |
 | `L` | back to live |
 | `T` | toggle theme |
 | `S` | share & track |

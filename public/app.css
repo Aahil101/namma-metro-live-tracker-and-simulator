@@ -682,12 +682,66 @@ body.is-paused .btn-play {
 .btn-rate:hover { color: var(--txt); }
 .btn-rate[disabled] { opacity: .3; cursor: default; }
 .btn-rate[disabled]:hover { background: var(--btn-bg); border-color: var(--stroke); }
+
+/* the notch readout: signed step from real time, plus the actual multiplier */
 .speed-read {
-  min-width: 38px; text-align: center;
-  font-family: var(--mono); font-size: .78rem; font-weight: 650;
-  font-variant-numeric: tabular-nums; color: var(--txt);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-width: 54px; padding: 3px 7px; gap: 1px; cursor: pointer;
+  font: inherit; color: var(--txt); line-height: 1;
+  background: var(--btn-bg); border: 1px solid var(--stroke); border-radius: 8px;
+  transition: background .15s, border-color .15s;
 }
-body.is-paused .speed-read { color: var(--txt-3); }
+.speed-read:hover { background: var(--btn-bg-hi); border-color: var(--stroke-2); }
+.speed-read.is-custom { border-color: var(--accent-edge); background: var(--accent-tint); }
+.sr-notch {
+  font-family: var(--mono); font-size: .8rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+}
+.sr-mult {
+  font-family: var(--mono); font-size: .58rem; color: var(--txt-3);
+  font-variant-numeric: tabular-nums;
+}
+.speed-read.is-fast .sr-notch  { color: var(--peak-txt); }
+.speed-read.is-slow .sr-notch  { color: var(--accent-txt-2); }
+body.is-paused .speed-read .sr-notch { color: var(--txt-3); }
+body.is-paused .speed-read .sr-mult  { color: var(--accent-txt-2); }
+
+/* custom speed popover */
+.playbar { position: relative; }
+.speed-custom {
+  position: absolute; bottom: calc(100% + 12px); right: 0; z-index: 30;
+  width: 246px; padding: 12px;
+  background: var(--panel-sol); border: 1px solid var(--stroke-2);
+  border-radius: 13px; box-shadow: var(--shadow);
+  animation: popIn .16s cubic-bezier(.32,.72,0,1);
+}
+@keyframes popIn { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+.sc-head {
+  font-size: .6rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--txt-3); margin-bottom: 9px;
+}
+.sc-presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; margin-bottom: 10px; }
+.sc-preset {
+  font: inherit; font-family: var(--mono); font-size: .64rem; font-weight: 620;
+  padding: 5px 0; cursor: pointer; color: var(--txt-2);
+  background: var(--surface); border: 1px solid transparent; border-radius: 6px;
+  transition: all .13s;
+}
+.sc-preset:hover { background: var(--surface-hi); color: var(--txt); }
+.sc-preset.is-on { background: var(--accent-tint); border-color: var(--accent-edge-2); color: var(--accent-txt); }
+.sc-row { display: flex; align-items: center; gap: 7px; }
+.sc-input {
+  flex: 1; min-width: 0; font: inherit; font-family: var(--mono); font-size: .86rem;
+  color: var(--txt); background: var(--surface);
+  border: 1px solid var(--stroke); border-radius: var(--r-sm); padding: 7px 9px;
+}
+.sc-input:focus { outline: none; border-color: var(--accent-edge-2); background: var(--accent-wash); }
+.sc-x { font-family: var(--mono); color: var(--txt-3); font-size: .85rem; }
+.sc-hint { margin: 9px 0 0; font-size: .64rem; line-height: 1.65; color: var(--txt-3); }
+.sc-hint kbd {
+  font-family: var(--mono); font-size: .92em; padding: 0 4px; border-radius: 4px;
+  background: var(--surface-hi); border: 1px solid var(--stroke);
+}
 
 /* ------------------------------ theme toggle --------------------------- */
 #btn-theme .icon-sun { display: none; }
@@ -821,6 +875,13 @@ table.tbl tr.now td { background: var(--live-wash); color: var(--txt); }
   .tracking-chip { left: 8px; right: 8px; max-width: none; bottom: calc(var(--timebar-h) + 12px); }
   .datanote { display: none; }
   .timebar { left: 8px; right: 8px; bottom: 8px; }
+  /* the playbar needs its own row once the slider is this narrow */
+  .tb-row { flex-wrap: wrap; }
+  .playbar {
+    width: 100%; justify-content: center; margin: 8px 0 0;
+    padding: 8px 0 0; border-left: 0; border-top: 1px solid var(--stroke);
+  }
+  .speed-custom { right: 0; left: auto; width: min(246px, calc(100vw - 32px)); }
   .freq-strip { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
   .freq-strip::-webkit-scrollbar { height: 0; }
 }
