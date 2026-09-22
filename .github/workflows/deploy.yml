@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      # no dependencies to install â€” the engine tests are plain Node
+      # no dependencies to install — the engine tests are plain Node
       - name: Simulation tests
         run: node tools/test-sim.mjs
       - name: API tests
@@ -32,6 +32,10 @@ jobs:
         run: node tools/verify.mjs
       - name: Deploy preflight
         run: node tools/preflight.mjs
+      - name: Encoding audit
+        run: node tools/audit-encoding.mjs
+      - name: README check
+        run: node tools/check-readme.mjs
 
   deploy:
     needs: test

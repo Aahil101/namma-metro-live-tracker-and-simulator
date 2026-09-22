@@ -12,6 +12,8 @@
     "data:fetch": "node tools/fetch-gtfs.mjs && node tools/build-data.mjs",
     "verify": "node tools/verify.mjs",
     "preflight": "node tools/preflight.mjs",
+    "lint:encoding": "node tools/audit-encoding.mjs",
+    "lint:readme": "node tools/check-readme.mjs",
     "test": "node tools/test-sim.mjs && node tools/test-api.mjs",
     "test:sim": "node tools/test-sim.mjs",
     "test:api": "node tools/test-api.mjs",
