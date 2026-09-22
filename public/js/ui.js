@@ -11,6 +11,8 @@ import { pickText, esc } from './map-view.js';
 import { encodeRun, decodeRun, formatCode, shareUrl } from './sharecode.js';
 import { applyTheme } from './theme.js';
 import { sendFeedback, mailtoLink } from './feedback.js';
+import { liveUsers } from './visits.js';
+import { API_BASE } from './config.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -219,6 +221,25 @@ export class UI {
     /* ---- theme ---- */
     $('btn-theme').addEventListener('click', () => this.toggleTheme());
 
+    /* ---- shrink / focus mode ---- */
+    $('btn-shrink').addEventListener('click', () => this.setShrunk(!this.state.shrunk));
+    $('chip-panels').addEventListener('click', () => this.setShrunk(false));
+    $('chip-time').addEventListener('click', () => this.setShrunk(false));
+
+    /* ---- per-card collapse ---- */
+    for (const card of document.querySelectorAll('.card[data-collapsible]')) {
+      const btn = card.querySelector('.card-fold');
+      if (!btn) continue;
+      btn.textContent = '\u2013';                       // en dash = collapse
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const folded = card.classList.toggle('is-folded');
+        btn.textContent = folded ? '+' : '\u2013';
+        btn.title = folded ? 'Expand' : 'Collapse';
+        btn.setAttribute('aria-expanded', String(!folded));
+      });
+    }
+
     /* ---- feedback ---- */
     $('btn-feedback').addEventListener('click', () => this.openFeedback());
     $('fb-close').addEventListener('click', () => { $('fb-modal').hidden = true; });
@@ -331,6 +352,7 @@ export class UI {
       if (k === 't') this.toggleTheme();
       if (k === 'f') this.openFeedback();
       if (k === 'x') this.toggleCustom();
+      if (k === 'z') this.setShrunk(!s.shrunk);
     });
 
     // clicks on the map
@@ -450,6 +472,52 @@ export class UI {
     $('btn-play').title = s.paused ? 'Play (Space)' : 'Pause (Space)';
 
     if (!$('speed-custom').hidden) this._renderPresets();
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Shrink / focus mode
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Fold every panel out to the edges so the map has the whole viewport, and
+   * leave two corner chips to bring them back. Persisted, because someone who
+   * wants a clean map usually wants it every time.
+   */
+  setShrunk(on) {
+    this.state.shrunk = on;
+    document.body.classList.toggle('is-shrunk', on);
+    $('shrunk-bar').hidden = !on;
+    $('btn-shrink').setAttribute('aria-pressed', String(on));
+    $('btn-shrink').title = on ? 'Restore panels (Z)' : 'Shrink panels to the corners (Z)';
+    try { localStorage.setItem('nml.shrunk', on ? '1' : '0'); } catch { /* ignore */ }
+    // the map's own size did not change, but its usable area did
+    setTimeout(() => this.metro.map.resize(), 320);
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Live viewer count
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Show how many people are on the site right now. This genuinely requires the
+   * API — a browser cannot see other visitors — so with no backend the pill
+   * stays hidden rather than showing an invented number.
+   */
+  async pollLiveUsers() {
+    const box = $('live-users');
+    const data = await liveUsers();
+    if (!data || typeof data.live !== 'number') { box.hidden = true; return; }
+    box.hidden = false;
+    $('lu-count').textContent = String(data.live);
+    box.title = `${data.live} viewing now · ${data.views24 ?? '?'} views in 24 h`;
+  }
+
+  startLiveUsers() {
+    if (!API_BASE) return;              // nothing to poll
+    this.pollLiveUsers();
+    setInterval(() => {
+      if (document.visibilityState === 'visible') this.pollLiveUsers();
+    }, 30_000);
   }
 
   /* ------------------------------------------------------------------ *
@@ -715,6 +783,13 @@ export class UI {
     pb.className = `badge ${peak.kind}`;
 
     $('stat-trains').textContent = trainCount;
+
+    // corner chips mirror the header while shrunk
+    if (this.state.shrunk) {
+      $('chip-count').textContent = trainCount;
+      $('chip-clock').textContent = hhmm(displaySec);
+    }
+
     if (!this.state.sliderDragging) $('time-slider').value = Math.floor(displaySec % 86400);
   }
 

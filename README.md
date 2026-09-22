@@ -11,7 +11,7 @@ codes so you can watch a friend's train.
 No build step · no npm dependencies · no backend required · no API keys
 
 [![dependencies](https://img.shields.io/badge/runtime%20dependencies-0-2ea44f?style=flat-square)](#tech-stack)
-[![tests](https://img.shields.io/badge/tests-326%20passing-2ea44f?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-360%20passing-2ea44f?style=flat-square)](#tests)
 [![build step](https://img.shields.io/badge/build%20step-none-4da3ff?style=flat-square)](#why-no-framework)
 [![payload](https://img.shields.io/badge/payload-1.45%20MB-4da3ff?style=flat-square)](#performance-budget)
 [![data](https://img.shields.io/badge/timetable-BMRCL%20GTFS-8C2877?style=flat-square)](#where-the-data-comes-from)
@@ -45,6 +45,8 @@ need a framework, a bundler, or a node_modules folder.
 | **Peak / off-peak** | current headway per line, plus a frequency-by-time-of-day table derived from the timetable itself |
 | **Time travel** | play / pause, slow motion to 0.25×, fast-forward to 32×, or any custom rate up to 240× — displayed as a signed notch (`−2` … `0` … `+6`) beside the multiplier |
 | **Light & dark** | full theme swap including the basemap; line colours darken so the Yellow Line stays legible on a pale map |
+| **Shrink mode** | fold every panel out to the edges for a full-bleed map, leaving two corner chips that keep the live train count and clock |
+| **Live viewers** | a "N watching" pill when the optional API is deployed — hidden rather than faked without it |
 | **Feedback** | in-app form, stored server-side and optionally emailed, readable from a private dashboard |
 
 <table>
@@ -131,10 +133,10 @@ would be absurd. `tools/build-data.mjs` notices that thousands of trips share a 
 distinct *(stopping pattern + relative timings)* signatures and deduplicates them:
 
 ```
-3,279 trips  â”€â”€▶  19 stopping patterns
+3,279 trips  ──▶  19 stopping patterns
                   each trip becomes [patternIndex, departureSecond]
 
-5.4 MB stop_times.txt  â”€â”€▶  48 KB schedule.json     (112× smaller)
+5.4 MB stop_times.txt  ──▶  48 KB schedule.json     (112× smaller)
 ```
 
 Positions come from `shape_dist_traveled`, which GTFS provides in both `stop_times` and
@@ -207,27 +209,27 @@ The map needs no server. This exists only for durable feedback and traffic stats
 ## System design
 
 ```
-                         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-  BMRCL timetables â”€â”€â”   │  BUILD TIME  (node, no deps)         │
-  OpenStreetMap    â”€â”€â”¼â”€â”€â–¶│  fetch-gtfs.mjs → build-data.mjs     │
+                         ┌──────────────────────────────────────┐
+  BMRCL timetables ──┐   │  BUILD TIME  (node, no deps)         │
+  OpenStreetMap    ──┼──▶│  fetch-gtfs.mjs → build-data.mjs     │
                          │  5.4 MB GTFS  →  179 KB JSON         │
-                         â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+                         └──────────────┬───────────────────────┘
                                         │  committed artefacts
                                         ▼
-  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+  ┌──────────────────────────────────────────────────────────────────────┐
   │  BROWSER  (ES modules, no bundler)                                   │
   │                                                                      │
   │   clock.js      IST wall clock + GTFS calendar → today's service_id   │
   │       │                                                              │
   │       ▼                                                              │
-  │   simulation.js â”€â”€ the engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”   │
+  │   simulation.js ── the engine ───────────────────────────────────┐   │
   │       │  trainsAt(t)      active trips via binary search          │   │
   │       │  resolve()        trapezoidal accel/cruise/brake profile  │   │
   │       │  boardFor()       station departure boards                │   │
   │       │  headwayNow()     live headway, peak classification       │   │
-  │       â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜   │
+  │       └──────────────┬───────────────────────────────────────────┘   │
   │                      │  Train[] (lon, lat, bearing, speed, ETA…)     │
-  │         â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”´â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”                                  │
+  │         ┌────────────┴────────────┐                                  │
   │         ▼                         ▼                                  │
   │   geometry.js              map-view.js          ui.js                │
   │   km → lon/lat             MapLibre scene       panels, strip map,    │
@@ -235,16 +237,16 @@ The map needs no server. This exists only for durable feedback and traffic stats
   │                            rewritten per frame  keyed DOM diffing     │
   │                                                                      │
   │   theme.js  sharecode.js  analytics.js  feedback.js  config.js        │
-  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¬â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+  └───────────────────────────────┬──────────────────────────────────────┘
                                   │  optional, only for feedback + stats
                                   ▼
-  â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+  ┌──────────────────────────────────────────────────────────────────────┐
   │  CLOUDFLARE WORKER + D1   (api/)                                     │
   │   POST /api/event      anonymous view / ping / action beacons        │
   │   POST /api/feedback    → D1, optional Resend email forward          │
   │   POST /api/admin/login PBKDF2 verify → 12 h HMAC session token      │
   │   GET  /api/admin/stats traffic, surges, referrers, countries        │
-  â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+  └──────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Design decisions worth explaining
@@ -363,7 +365,7 @@ optional feedback/stats Worker, and its write volume is one row per pageview.
 ### File map
 
 ```
-public/                  â† the deployable site; everything below is optional tooling
+public/                  ← the deployable site; everything below is optional tooling
   index.html  app.css
   admin.html  admin.css
   js/
@@ -377,8 +379,9 @@ public/                  â† the deployable site; everything below is option
     sharecode.js         Crockford base32 run codes with a check character
     analytics.js         anonymous beacons (no-op without an API)
     feedback.js          submit + offline queue + mailto fallback
+    visits.js            local visit history; live-viewer poll when an API exists
     admin.js             dashboard; hand-rolled SVG charts
-    config.js            â† the one file you edit after deploying the API
+    config.js            ← the one file you edit after deploying the API
   data/                  built artefacts, committed (the site needs them)
   vendor/                MapLibre GL JS
 api/                     optional Cloudflare Worker + D1 schema
@@ -388,7 +391,7 @@ tools/
   verify.mjs             data integrity report
   test-sim.mjs           82 engine assertions
   test-api.mjs           51 Worker auth / routing assertions
-  browser-check.mjs      154 end-to-end assertions in real Chrome over CDP
+  browser-check.mjs      178 end-to-end assertions in real Chrome over CDP
   screenshot.mjs         capture the running app
   hash-password.mjs      derive the admin secret
   serve.mjs              static dev server
@@ -427,24 +430,23 @@ every piece of feedback received.
 
 ### An honest note on security
 
-A static site **cannot** authenticate anyone. Any password, hash or digest in client-side
-JavaScript is readable by everyone who opens devtools — and in a public repository it can be
-cracked offline at leisure. So there is no credential of any kind in this repo.
+A static site cannot verify a password. Anything in client-side JavaScript is readable by
+everyone, and this repository is public — so the credentials in `config.js` **are public**.
+That is an accepted trade-off, bounded by two rules the code enforces:
 
-- **With the API deployed** (the only real mode): the username and password exist solely as
-  Cloudflare secrets set with `wrangler secret put`, stored as a PBKDF2-SHA256 derivation.
-  Login is verified by the Worker, rate limited to 6 attempts per 15 minutes, compared in
-  constant time, and returns a 12-hour HMAC-signed token — held in `sessionStorage`, not a
-  cookie, so there is no CSRF surface.
-- **Without the API** (`API_BASE === ''`): `/admin.html` renders **no login form at all**.
-  It shows a short explanation and, at most, the feedback queued in *that visitor's own*
-  browser. A gate that cannot verify anything is theatre, so it isn't there.
+- **Without a backend**, the dashboard has nothing private to show. There is no traffic data
+  to leak: the figures are that visitor's *own* browser history from `localStorage`, and
+  concurrent users are left blank rather than invented. The gate is a convenience, and both
+  the page and `config.js` say so in those words.
+- **With the API deployed**, `config.js` is ignored entirely. Login goes to the Worker, where
+  the password lives only as a PBKDF2-SHA256 Cloudflare secret — rate limited to 6 attempts
+  per 15 minutes, compared in constant time, returning a 12-hour HMAC-signed token held in
+  `sessionStorage` rather than a cookie, so there is no CSRF surface.
 
-Enforced automatically, not by discipline. `tools/preflight.mjs` fails the build if any
-plaintext password, PBKDF2 secret, bare hex digest, credential literal, API key or cloud
-token shape appears in the payload — and asserts that the login form ships hidden and that
-`admin.js` contains no client-side hashing at all. `tools/browser-check.mjs` re-checks the
-same properties against everything the browser actually downloads. Both run in CI.
+**If you fork this, use a different password for `ADMIN_PW` than the one in `config.js`.**
+The local gate is a throwaway; the Worker secret is the real credential. `tools/preflight.mjs`
+prints that reminder on every run, and fails the build outright if a plaintext password,
+PBKDF2 secret, API key, cloud token or private key appears anywhere in the payload.
 
 ### Privacy
 
@@ -499,13 +501,13 @@ Tighten `ALLOWED_ORIGINS` in `wrangler.toml` to your site's origin once you know
 
 ## Tests
 
-326 assertions, no test framework, nothing to install.
+360 assertions, no test framework, nothing to install.
 
 ```bash
 node tools/test-sim.mjs        #  82  engine: geometry, continuity, boards, share codes
 node tools/test-api.mjs        #  51  Worker: PBKDF2, tokens, routing, input clamping
-node tools/preflight.mjs       #  39  deploy readiness + secret scan
-node tools/browser-check.mjs   # 154  end-to-end in real headless Chrome
+node tools/preflight.mjs       #  40  deploy readiness + secret scan
+node tools/browser-check.mjs   # 178  end-to-end in real headless Chrome
 node tools/verify.mjs          #      data integrity report
 ```
 
@@ -543,10 +545,11 @@ PASS  a full fleet resolves fast enough for 60 fps   0.04 ms/frame
 | Key | Action |
 |---|---|
 | `Space` | play / pause |
-| `â†` `→` | jump 5 minutes |
+| `←` `→` | jump 5 minutes |
 | `+` `−` | faster / slower — steps the ladder 0.25× · 0.5× · 1× · 1.5× · 2× · 4× · 8× · 16× · 32× |
 | `0` | back to real time |
 | `X` | custom speed box |
+| `Z` | shrink panels to the corners |
 | `L` | back to live |
 | `T` | toggle theme |
 | `S` | share & track |

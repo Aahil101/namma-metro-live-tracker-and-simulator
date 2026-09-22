@@ -946,74 +946,212 @@ try {
   ok(admReady, 'admin page loads');
   ok(adm?.gateVisible && adm?.dashHidden, 'the dashboard is gated');
   ok(/noindex/.test(adm?.robots || ''), 'admin page is noindex', adm?.robots);
+  ok(adm?.hasPasswordField, 'the password field is type=password');
 
-  // With no API there must be no login form at all, and no credential anywhere.
-  const gate = await cdp.eval(`
-    const form = document.getElementById('gate-form');
-    const noapi = document.getElementById('gate-noapi');
-    return {
-      hasApi: window.__admin.hasApi,
-      formShown:  getComputedStyle(form).display  !== 'none',
-      noapiShown: getComputedStyle(noapi).display !== 'none',
-      noapiText: noapi.textContent.replace(/\\s+/g, ' ').trim(),
-      pwFields: document.querySelectorAll('input[type=password]').length,
-      pwVisible: [...document.querySelectorAll('input[type=password]')]
-        .filter(i => i.offsetParent !== null).length,
-    };
+  // the local gate must reject wrong credentials and accept the right ones
+  const wrongPw = await cdp.eval(`
+    document.getElementById('gu').value = 'nammametro';
+    document.getElementById('gp').value = 'definitely-not-the-password';
+    document.getElementById('gate-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 400));
+    return { dashHidden: document.getElementById('dash').hidden,
+             msg: document.getElementById('gate-msg').textContent };
   `);
-  console.log(`  API configured: ${gate.hasApi}; login form shown: ${gate.formShown}`);
-  ok(gate.hasApi === false, 'test runs in the no-API configuration');
-  ok(!gate.formShown, 'no login form is rendered without a backend');
-  ok(gate.noapiShown, 'an explanation card is shown instead');
-  ok(gate.pwVisible === 0, 'no password field is reachable', `${gate.pwFields} in DOM, ${gate.pwVisible} visible`);
-  ok(/no login here and no credential in this page/i.test(gate.noapiText),
-    'the page states plainly that it holds no credential');
+  ok(wrongPw.dashHidden, 'a wrong password does not open the dashboard');
+  ok(/invalid/i.test(wrongPw.msg), 'a wrong password reports an error', wrongPw.msg);
 
-  // The property that matters most now this repo is public: no credential
-  // material of any shape in anything the browser downloads.
+  const wrongUser = await cdp.eval(`
+    document.getElementById('gu').value = 'admin';
+    document.getElementById('gp').value = 'nammametro@14231423';
+    document.getElementById('gate-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 400));
+    return document.getElementById('dash').hidden;
+  `);
+  ok(wrongUser, 'a wrong username does not open the dashboard');
+
+  // no plaintext password, and no server secret, in anything the browser downloads
   const secrets = await cdp.eval(`
     const urls = ['./js/admin.js', './js/config.js', './js/feedback.js', './js/analytics.js',
-                  './js/main.js', './js/ui.js', './admin.html', './index.html'];
+                  './js/visits.js', './js/main.js', './js/ui.js', './admin.html', './index.html'];
     const out = {};
     for (const u of urls) out[u] = await (await fetch(u)).text();
     const all = Object.values(out).join('\\n');
     return {
       bytes: all.length,
-      plaintextPw:  /aahil@1423/i.test(all),
-      adminUser:    /LOCAL_ADMIN|\\badmin_user\\b/i.test(all),
-      anyHexDigest: /(digest|hash|pw|pass|key|sig)\\w*\\s*[:=]\\s*['"\`][0-9a-f]{32,}['"\`]/i.test(all),
+      plaintextPw:  /nammametro@\\d/i.test(all),
+      oldPw:        /aahil@\\d/i.test(all),
       pbkdf2Secret: /\\b\\d{4,7}:[A-Za-z0-9+/]{20,}={0,2}:[A-Za-z0-9+/]{40,}={0,2}/.test(all),
-      clientHashing: /crypto\\.subtle\\.digest|createHash/i.test(all),
-      ownerEmail:   /heworld2046/.test(all),
+      privateKey:   /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(all),
+      hasDigest:    /digest:\\s*'[0-9a-f]{64}'/.test(all),
+      saysNotSecurity: /not security/i.test(all),
     };
   `);
   console.log(`  scanned ${secrets.bytes} bytes of everything the browser downloads`);
-  ok(!secrets.plaintextPw, 'no plaintext password anywhere in the client');
-  ok(!secrets.adminUser, 'no admin username or credential block in the client');
-  ok(!secrets.anyHexDigest, 'no password digest of any kind in the client');
-  ok(!secrets.pbkdf2Secret, 'no PBKDF2 secret in the client');
-  ok(!secrets.clientHashing, 'the client does no credential hashing at all');
-  ok(secrets.ownerEmail, 'the mailto fallback address is present (expected, not a secret)');
+  ok(!secrets.plaintextPw, 'the password never appears in plaintext');
+  ok(!secrets.oldPw, 'no previously used password lingers in the payload');
+  ok(!secrets.pbkdf2Secret, 'no server PBKDF2 secret in the client');
+  ok(!secrets.privateKey, 'no private key in the client');
+  ok(secrets.hasDigest, 'the local gate ships a digest (expected, and documented as weak)');
+  ok(secrets.saysNotSecurity, 'the code states plainly that the local gate is not security');
 
-  // the queued-feedback view still works, since that is this browser's own data
-  const queue = await cdp.eval(`
+  // correct credentials open the dashboard, showing this browser's own history
+  const good = await cdp.eval(`
+    localStorage.setItem('nml.visits', JSON.stringify({
+      total: 12, first: '2026-09-14T04:00:00.000Z', last: new Date().toISOString(),
+      days: { '2026-09-18': 2, '2026-09-19': 3, '2026-09-20': 1, '2026-09-22': 6 }
+    }));
     localStorage.setItem('nml.fb.queue', JSON.stringify([
-      { kind: 'bug', message: 'Test report one', context: {}, at: new Date().toISOString() },
-      { kind: 'idea', message: 'Test idea two', context: {}, at: new Date().toISOString() }
+      { kind: 'bug', message: 'Test report', context: {}, at: new Date().toISOString() }
     ]));
-    window.__admin.showGate();
-    const host = document.getElementById('local-queue');
-    return { items: host.querySelectorAll('.nq-item').length, head: host.textContent.slice(0, 60) };
+    document.getElementById('gu').value = 'nammametro';
+    document.getElementById('gp').value = 'nammametro@14231423';
+    document.getElementById('gate-form').dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 1000));
+    return {
+      dashShown: !document.getElementById('dash').hidden,
+      banner: document.getElementById('adm-banner').textContent.replace(/\\s+/g,' ').trim(),
+      views: document.getElementById('kpi-views').textContent,
+      viewsSub: document.getElementById('kpi-sess').textContent,
+      live: document.getElementById('kpi-live').textContent,
+      liveSub: document.getElementById('kpi-live').closest('.kpi').querySelector('.kpi-sub').textContent,
+      activeDays: document.getElementById('kpi-surge').textContent,
+      fb: document.getElementById('kpi-fb').textContent,
+      bars: document.querySelectorAll('#chart-days rect').length,
+      lists: [...document.querySelectorAll('.bl-empty')].map(e => e.textContent.slice(0, 30)),
+    };
   `);
-  ok(queue.items === 2, "this browser's own queued feedback is still listed", `${queue.items}`);
+  console.log(`  signed in: ${good.views} total visits, ${good.activeDays} active days, ${good.bars} chart bars`);
+  ok(good.dashShown, 'correct credentials open the dashboard');
+  ok(good.views === '12', 'total local visits are shown', good.views);
+  ok(good.activeDays === '4', 'active-day count is derived from local history', good.activeDays);
+  ok(good.fb === '1', 'queued feedback count is shown', good.fb);
+  ok(good.bars >= 4, 'the visits chart renders bars', `${good.bars}`);
+  ok(good.live === '\u2014' && /needs the API/i.test(good.liveSub),
+    'concurrent users is blank without a backend, not invented', `${good.live} / ${good.liveSub}`);
+  ok(/this browser only/i.test(good.banner), 'a banner states the figures are this browser only',
+    good.banner.slice(0, 70));
+  ok(good.lists.length >= 4, 'referrers/countries/devices explain they need the API');
 
-  const stillGated = await cdp.eval(`
-    return { dashHidden: document.getElementById('dash').hidden,
-             gateShown: getComputedStyle(document.getElementById('gate')).display !== 'none' };
+  const signedOut = await cdp.eval(`
+    document.getElementById('adm-logout').click();
+    await new Promise(r => setTimeout(r, 200));
+    return { gate: getComputedStyle(document.getElementById('gate')).display !== 'none',
+             dashHidden: document.getElementById('dash').hidden };
   `);
-  ok(stillGated.dashHidden && stillGated.gateShown,
-    'the dashboard stays inaccessible without a server-issued token');
+  ok(signedOut.gate && signedOut.dashHidden, 'sign out returns to the gate');
 
+
+  /* ---------------------- shrink mode & folding ------------------------ */
+  console.log(`\n── shrink mode ${'─'.repeat(37)}`);
+
+  // the admin checks navigated away; come back to the map before testing its UI
+  await cdp.send('Page.navigate', { url: URL_TO_TEST });
+  for (let i = 0; i < 60; i++) {
+    await sleep(500);
+    const up = await cdp.eval(`return Boolean(window.__metro && window.__metro.metro && window.__metro.metro.ready);`)
+      .catch(() => false);
+    if (up) break;
+  }
+  await cdp.eval(`localStorage.removeItem('nml.shrunk'); window.__metro.ui.setShrunk(false); return 'ok';`);
+
+  const shrink = await cdp.eval(`
+    const m = window.__metro;
+    const vis = (sel) => {
+      const el = document.querySelector(sel);
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      return cs.opacity !== '0' && cs.pointerEvents !== 'none'
+        && r.right > 0 && r.left < window.innerWidth
+        && r.bottom > 0 && r.top < window.innerHeight;
+    };
+    const before = { sidebar: vis('#sidebar'), timebar: vis('.timebar'),
+                     chips: !document.getElementById('shrunk-bar').hidden };
+
+    m.ui.setShrunk(true);
+    await new Promise(r => setTimeout(r, 500));
+    const after = {
+      sidebar: vis('#sidebar'), timebar: vis('.timebar'),
+      chips: !document.getElementById('shrunk-bar').hidden,
+      bodyClass: document.body.classList.contains('is-shrunk'),
+      pressed: document.getElementById('btn-shrink').getAttribute('aria-pressed'),
+      stored: localStorage.getItem('nml.shrunk'),
+      chipCount: document.getElementById('chip-count').textContent,
+      chipClock: document.getElementById('chip-clock').textContent,
+      mapVisible: !!document.querySelector('.maplibregl-canvas'),
+      zoomBottom: getComputedStyle(document.querySelector('.maplibregl-ctrl-bottom-right')).bottom,
+    };
+
+    // the chip restores everything
+    document.getElementById('chip-panels').click();
+    await new Promise(r => setTimeout(r, 500));
+    const restored = { sidebar: vis('#sidebar'), timebar: vis('.timebar'),
+                       chips: !document.getElementById('shrunk-bar').hidden,
+                       stored: localStorage.getItem('nml.shrunk') };
+    return { before, after, restored };
+  `);
+  console.log(`  before: sidebar=${shrink.before.sidebar} timebar=${shrink.before.timebar}`);
+  console.log(`  shrunk: sidebar=${shrink.after.sidebar} timebar=${shrink.after.timebar} chips=${shrink.after.chips}`);
+  console.log(`  chips show ${shrink.after.chipCount} trains at ${shrink.after.chipClock}`);
+
+  ok(shrink.before.sidebar && shrink.before.timebar, 'panels start visible');
+  ok(!shrink.after.sidebar, 'shrink hides the sidebar');
+  ok(!shrink.after.timebar, 'shrink hides the time bar');
+  ok(shrink.after.chips, 'corner chips appear while shrunk');
+  ok(shrink.after.bodyClass && shrink.after.pressed === 'true', 'shrink state is reflected on body and button');
+  ok(shrink.after.stored === '1', 'shrink preference is persisted');
+  ok(/^\d+$/.test(shrink.after.chipCount) && /^\d\d:\d\d$/.test(shrink.after.chipClock),
+    'chips mirror the live train count and clock', `${shrink.after.chipCount} / ${shrink.after.chipClock}`);
+  ok(shrink.after.mapVisible, 'the map is still rendering while shrunk');
+  ok(shrink.after.zoomBottom === '10px', 'map controls drop to the corner when the time bar goes',
+    shrink.after.zoomBottom);
+  ok(shrink.restored.sidebar && shrink.restored.timebar && !shrink.restored.chips,
+    'the corner chip restores every panel');
+  ok(shrink.restored.stored === '0', 'restoring clears the stored preference');
+
+  const keyZ = await cdp.eval(`
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true }));
+    await new Promise(r => setTimeout(r, 400));
+    const on = document.body.classList.contains('is-shrunk');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true }));
+    await new Promise(r => setTimeout(r, 400));
+    return { on, off: document.body.classList.contains('is-shrunk') };
+  `);
+  ok(keyZ.on && !keyZ.off, 'the Z key toggles shrink mode');
+
+  const fold = await cdp.eval(`
+    const cards = [...document.querySelectorAll('.card[data-collapsible]')];
+    const btn = cards[0].querySelector('.card-fold');
+    const glyphBefore = btn.textContent.trim();
+    const bodyBefore = getComputedStyle(cards[0].querySelector('.card-body')).display;
+    btn.click();
+    await new Promise(r => setTimeout(r, 200));
+    const out = {
+      cards: cards.length,
+      glyphBefore,
+      glyphAfter: btn.textContent.trim(),
+      bodyBefore,
+      bodyAfter: getComputedStyle(cards[0].querySelector('.card-body')).display,
+      folded: cards[0].classList.contains('is-folded'),
+      headStillVisible: cards[0].querySelector('.card-head').getBoundingClientRect().height > 0,
+    };
+    btn.click();
+    await new Promise(r => setTimeout(r, 200));
+    out.unfolded = !cards[0].classList.contains('is-folded');
+    return out;
+  `);
+  console.log(`  fold: ${fold.cards} collapsible cards, glyph ${fold.glyphBefore} -> ${fold.glyphAfter}`);
+  ok(fold.cards === 2, 'both sidebar cards are collapsible', `${fold.cards}`);
+  ok(fold.bodyBefore !== 'none' && fold.bodyAfter === 'none', 'folding hides the card body');
+  ok(fold.headStillVisible, 'the card header stays visible when folded');
+  ok(fold.glyphAfter === '+', 'the fold button switches to a plus', fold.glyphAfter);
+  ok(fold.unfolded, 'clicking again unfolds');
+
+  /* ---------------------- live viewer count --------------------------- */
+  const lu = await cdp.eval(`
+    const box = document.getElementById('live-users');
+    return { hidden: box.hidden, hasApi: Boolean(window.__metro.state) && undefined === undefined };
+  `);
+  ok(lu.hidden, 'the "watching" pill stays hidden with no backend, rather than faking a number');
 
   /* -------------------------- console hygiene ------------------------- */
   console.log(`\n── console hygiene ${'─'.repeat(33)}`);

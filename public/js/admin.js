@@ -13,8 +13,9 @@
  * Charts are hand-rolled SVG. No chart library, no CDN, nothing to audit.
  */
 
-import { API_BASE, OWNER_EMAIL } from './config.js';
+import { API_BASE, OWNER_EMAIL, LOCAL_ADMIN } from './config.js';
 import { initialTheme, applyTheme } from './theme.js';
+import { localStats } from './visits.js';
 
 const $ = (id) => document.getElementById(id);
 const TOKEN_KEY = 'nml.admin.token';
@@ -64,52 +65,40 @@ async function api(path, { method = 'GET', body, auth = true } = {}) {
  *  Gate
  * ------------------------------------------------------------------ */
 
-/**
- * Decide which face the gate shows. With no API there is no server to verify a
- * password against, so no login form is rendered and no credential — not even a
- * username — exists anywhere in this page. Pretending otherwise in client-side
- * JavaScript would be security theatre in a public repository.
- */
 function showGate() {
   const hasApi = Boolean(API_BASE);
-  $('gate-form').hidden = !hasApi;
-  $('gate-noapi').hidden = hasApi;
 
-  if (hasApi) {
-    $('gate-note').innerHTML =
-      `Credentials are verified by the Worker at <code>${esc(new URL(API_BASE).host)}</code>. ` +
-      'Nothing authentication-related is stored in this page.';
-  } else {
-    renderLocalQueue();
-  }
+  $('gate-note').innerHTML = hasApi
+    ? `Credentials are verified by the Worker at <code>${esc(new URL(API_BASE).host)}</code>.`
+    : 'No backend is configured, so this gate is a convenience only \u2014 it is not security, and '
+      + 'the dashboard can show just this browser\u2019s own history. Deploy <code>api/</code> '
+      + 'for real site-wide traffic.';
 }
 
-/** The only thing a browser can legitimately show without a backend: its own queue. */
-function renderLocalQueue() {
-  let queue = [];
-  try { queue = JSON.parse(localStorage.getItem('nml.fb.queue') || '[]'); } catch { /* ignore */ }
-  const host = $('local-queue');
-
-  if (!queue.length) {
-    host.innerHTML = `<div class="nq-empty">
-      No feedback is queued in this browser. Messages sent from the map are stored
-      locally until the API exists, then uploaded automatically.<br><br>
-      Direct email always works: <a href="mailto:${OWNER_EMAIL}">${OWNER_EMAIL}</a>
-    </div>`;
-    return;
-  }
-
-  host.innerHTML = `<div class="nq-head">queued in this browser (${queue.length})</div>` +
-    queue.slice(-8).reverse().map((q) => `
-      <div class="nq-item">
-        <span class="nq-kind">${esc(q.kind || 'idea')}</span>${esc(String(q.message || '').slice(0, 220))}
-      </div>`).join('');
+/** SHA-256 hex — for the no-backend gate only. */
+async function sha256Hex(s) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 async function signIn(username, password) {
   const msg = $('gate-msg');
-  if (!API_BASE) return;   // no form is rendered in this case
 
+  // ---- no backend: compare against the digest in config.js ----------------
+  if (!API_BASE) {
+    const digest = await sha256Hex(`${username}:${password}:nml-local-v1`);
+    if (username !== LOCAL_ADMIN.user || digest !== LOCAL_ADMIN.digest) {
+      msg.className = 'share-msg bad';
+      msg.textContent = 'Invalid username or password.';
+      return;
+    }
+    msg.className = 'share-msg ok';
+    msg.textContent = 'Signed in.';
+    setTimeout(() => enterDashboard(true), 500);
+    return;
+  }
+
+  // ---- real path: the Worker decides -------------------------------------
   msg.className = 'share-msg';
   msg.textContent = 'Checking…';
   $('gate-go').disabled = true;
@@ -122,7 +111,7 @@ async function signIn(username, password) {
     try { sessionStorage.setItem(TOKEN_KEY, token); } catch { /* private mode */ }
     msg.className = 'share-msg ok';
     msg.textContent = 'Welcome back.';
-    enterDashboard();
+    enterDashboard(false);
   } catch (err) {
     msg.className = 'share-msg bad';
     msg.textContent = err.message === 'Failed to fetch'
@@ -146,14 +135,88 @@ function signOut(reason) {
   }
 }
 
-/** Only ever reached with a server-issued token. */
-function enterDashboard() {
+/** @param {boolean} localOnly true when there is no backend to query */
+function enterDashboard(localOnly) {
   $('gate').hidden = true;
   $('dash').hidden = false;
+
+  if (localOnly) {
+    const banner = $('adm-banner');
+    banner.hidden = false;
+    banner.className = 'adm-banner';
+    banner.innerHTML =
+      '<strong>This browser only.</strong> A static site has no server to record visitors, so the '
+      + 'figures below are <em>your own</em> visits from this browser — not site-wide traffic, and '
+      + 'concurrent users cannot be known at all. Deploy <code>api/</code> (Cloudflare Worker + D1, '
+      + 'free tier) and set <code>API_BASE</code> to get real numbers from every device.';
+    renderLocalDashboard();
+    return;
+  }
+
   $('adm-banner').hidden = true;
   refresh();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(refresh, REFRESH_MS);
+}
+
+/** Everything a browser can honestly report about itself. */
+function renderLocalDashboard() {
+  const v = localStats();
+
+  $('kpi-live').textContent = '—';
+  $('kpi-live').closest('.kpi').querySelector('.kpi-sub').textContent = 'needs the API';
+
+  $('kpi-views24').textContent = String(v.byDay.at(-1)?.views ?? 0);
+  $('kpi-sess24').textContent = 'your visits today';
+
+  $('kpi-views').textContent = String(v.total);
+  $('kpi-sess').textContent = v.first
+    ? `your visits since ${new Date(v.first).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
+    : 'your visits, all time';
+
+  $('kpi-surge').textContent = String(v.activeDays);
+  $('kpi-surge-sub').textContent = 'days you opened it';
+  $('kpi-surge-card').querySelector('.kpi-k').textContent = 'active days';
+  $('kpi-surge-card').classList.remove('is-surge');
+
+  let queue = [];
+  try { queue = JSON.parse(localStorage.getItem('nml.fb.queue') || '[]'); } catch { /* ignore */ }
+  $('kpi-fb').textContent = String(queue.length);
+  $('kpi-fb-sub').textContent = 'queued in this browser';
+
+  $('chart-legend').innerHTML = '<span><i style="background:var(--accent)"></i>your visits</span>';
+  if (v.byDay.length) groupedBars('chart-days', v.byDay, 'day', ['views'], (d) => d.slice(5).replace('-', '/'));
+  else emptyChart('chart-days', 'No visits recorded yet in this browser.');
+
+  emptyChart('chart-hours', 'Hour-of-day needs the API.');
+  for (const [id, label] of [
+    ['list-devices', 'Devices'], ['list-refs', 'Referrers'],
+    ['list-countries', 'Countries'], ['list-actions', 'Actions'],
+  ]) {
+    $(id).innerHTML = `<div class="bl-empty">${label} need the API — a browser cannot see other visitors.</div>`;
+  }
+
+  currentFeedback = queue.map((q, i) => ({
+    id: `local-${i + 1}`,
+    ts: Math.floor(new Date(q.at || Date.now()).getTime() / 1000),
+    kind: q.kind || 'idea',
+    message: q.message || '',
+    contact: q.contact || null,
+    context: q.context || {},
+    country: null,
+    is_read: 0,
+    emailed: 0,
+  }));
+  renderFeedback();
+  if (!currentFeedback.length) {
+    $('fb-list').innerHTML = `<div class="fb-empty">
+      Nothing queued in this browser.<br>
+      With the API deployed, feedback from every device appears here.<br>
+      Direct email always works: <a href="mailto:${OWNER_EMAIL}">${OWNER_EMAIL}</a>
+    </div>`;
+  }
+
+  $('adm-updated').textContent = `local · ${IST.format(new Date())} IST`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -424,7 +487,7 @@ showGate();
 
 try {
   const saved = sessionStorage.getItem(TOKEN_KEY);
-  if (saved && API_BASE) { token = saved; enterDashboard(); }
+  if (saved && API_BASE) { token = saved; enterDashboard(false); }
 } catch { /* ignore */ }
 
 window.__admin = {

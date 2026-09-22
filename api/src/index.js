@@ -294,6 +294,26 @@ async function handleLogin(env, request) {
   return json({ ok: true, token: await mintToken(env, user), expiresIn: SESSION_TTL_SEC }, 200);
 }
 
+/**
+ * Public, unauthenticated: how many distinct sessions pinged in the last five
+ * minutes. Fuels the "N watching" pill on the map. Deliberately returns only
+ * two aggregate integers — nothing about who, where, or what they looked at.
+ */
+async function handleLive(env) {
+  const now = Math.floor(Date.now() / 1000);
+  const row = await env.DB.prepare(
+    `SELECT COUNT(DISTINCT sid) AS live FROM events WHERE ts >= ?`,
+  ).bind(now - 300).first();
+  const day = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM events WHERE type='view' AND ts >= ?`,
+  ).bind(now - 86400).first();
+
+  return json({ live: row?.live || 0, views24: day?.n || 0 }, 200, {
+    // brief caching keeps this cheap under a traffic spike
+    'cache-control': 'public, max-age=20',
+  });
+}
+
 async function handleStats(env, request, url) {
   const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 14));
   const now = Math.floor(Date.now() / 1000);
@@ -433,6 +453,7 @@ export default {
       }
 
       if (p === '/api/event' && request.method === 'POST') return send(await handleEvent(env, request));
+      if (p === '/api/live' && request.method === 'GET') return send(await handleLive(env));
       if (p === '/api/feedback' && request.method === 'POST') return send(await handleFeedback(env, request));
       if (p === '/api/admin/login' && request.method === 'POST') return send(await handleLogin(env, request));
 

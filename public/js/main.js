@@ -18,6 +18,7 @@ import { codeFromUrl } from './sharecode.js';
 import { initialTheme, applyTheme } from './theme.js';
 import { startAnalytics, track } from './analytics.js';
 import { flushQueue } from './feedback.js';
+import { recordVisit } from './visits.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,6 +35,7 @@ const state = {
   filter: '',
   lines: new Set(),
   theme: 'dark',
+  shrunk: false,
   selectedStation: null,
   selectedTrainId: null,
   followId: null,
@@ -94,6 +96,13 @@ async function boot() {
 
   const ui = new UI(sim, metro, state, meta);
   ui.setLive(true);
+
+  // restore the user's shrink preference
+  try { if (localStorage.getItem('nml.shrunk') === '1') ui.setShrunk(true); } catch { /* ignore */ }
+
+  // count this visit locally, and start polling the live viewer count if an API exists
+  recordVisit();
+  ui.startLiveUsers();
 
   // a shared link like ?train=MTR4K7P2XQ8 starts tracking immediately
   const linkCode = codeFromUrl();

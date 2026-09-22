@@ -74,6 +74,7 @@ Email failures never fail the request — the message is already safely in D1.
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET`  | `/api/health` | — | liveness + which features are configured |
+| `GET`  | `/api/live` | — | `{live, views24}` — powers the "N watching" pill, 20 s edge cache |
 | `POST` | `/api/event` | — | anonymous `view` / `ping` / `action` / `leave` beacon |
 | `POST` | `/api/feedback` | — | store a message, optionally email it |
 | `POST` | `/api/admin/login` | — | username + password → 12 h bearer token |

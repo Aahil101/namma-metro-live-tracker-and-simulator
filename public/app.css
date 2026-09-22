@@ -781,6 +781,82 @@ body.is-paused .speed-read .sr-mult  { color: var(--accent-txt-2); }
 .fb-actions { display: flex; align-items: center; gap: 9px; margin-top: 18px; flex-wrap: wrap; }
 .fb-actions a.btn { text-decoration: none; }
 
+/* ---------------------- live viewer count (topbar) --------------------- */
+.liveusers {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px 5px 8px; border-radius: 99px;
+  background: var(--live-tint); border: 1px solid var(--live-edge);
+}
+.lu-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--live);
+  animation: pulse 1.7s ease-out infinite;
+}
+.lu-count {
+  font-family: var(--mono); font-size: .84rem; font-weight: 680;
+  font-variant-numeric: tabular-nums; color: var(--live);
+}
+.lu-lbl { font-size: .6rem; text-transform: uppercase; letter-spacing: .07em; color: var(--txt-3); }
+
+/* --------------------------- shrink / focus mode ----------------------- */
+#btn-shrink .icon-expand { display: none; }
+body.is-shrunk #btn-shrink .icon-expand { display: block; }
+body.is-shrunk #btn-shrink .icon-shrink { display: none; }
+body.is-shrunk #btn-shrink { background: var(--accent-tint); border-color: var(--accent-edge); color: var(--accent-txt-2); }
+
+/* everything folds away to the edges, leaving the map */
+body.is-shrunk .sidebar {
+  transform: translateX(calc(-100% - 20px)); opacity: 0; pointer-events: none;
+}
+body.is-shrunk .timebar {
+  transform: translateY(calc(100% + 20px)); opacity: 0; pointer-events: none;
+}
+body.is-shrunk .station-panel,
+body.is-shrunk .train-panel {
+  transform: translateX(calc(100% + 20px)); opacity: 0; pointer-events: none;
+}
+body.is-shrunk .maplibregl-ctrl-bottom-right,
+body.is-shrunk .maplibregl-ctrl-bottom-left { bottom: 10px !important; }
+.timebar, .station-panel, .train-panel {
+  transition: transform .3s cubic-bezier(.32,.72,0,1), opacity .22s;
+}
+
+/* corner chips that bring things back */
+.shrunk-bar {
+  position: fixed; z-index: 58; left: 10px; bottom: 10px;
+  display: flex; gap: 8px;
+  animation: slideIn .24s cubic-bezier(.32,.72,0,1);
+}
+.chip {
+  display: flex; align-items: center; gap: 7px; cursor: pointer;
+  padding: 8px 13px 8px 11px; border-radius: 99px;
+  font: inherit; color: var(--txt);
+  background: var(--panel); backdrop-filter: blur(16px) saturate(1.4);
+  border: 1px solid var(--stroke-2); box-shadow: var(--shadow);
+  transition: background .15s, border-color .15s, transform .12s;
+}
+.chip:hover { background: var(--panel-sol); border-color: var(--accent-edge); }
+.chip:active { transform: scale(.97); }
+.chip-ico { font-size: .9rem; line-height: 1; }
+.chip-lbl { font-size: .68rem; color: var(--txt-3); text-transform: uppercase; letter-spacing: .07em; }
+.chip-lbl.mono { font-family: var(--mono); text-transform: none; letter-spacing: 0; color: var(--txt-2); font-size: .74rem; }
+#chip-count { font-family: var(--mono); font-size: .82rem; font-weight: 680; font-variant-numeric: tabular-nums; }
+
+/* ------------------------- per-card collapse -------------------------- */
+.head-tools { display: flex; align-items: center; gap: 7px; }
+.card-fold {
+  width: 22px; height: 22px; padding: 0; border-radius: 6px;
+  font-family: var(--mono); font-size: .95rem; line-height: 1;
+  color: var(--txt-3);
+}
+.card-fold:hover { color: var(--txt); }
+.card-body { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.card.is-folded { flex: 0 0 auto; }
+.card.is-folded .card-body { display: none; }
+.card.is-folded .card-head { margin-bottom: 0; }
+.card.is-folded .card-fold { color: var(--accent-txt-2); }
+/* sort control is meaningless while the list is hidden */
+.card.is-folded .seg { display: none; }
+
 /* ============================== modal ================================== */
 .modal {
   position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;

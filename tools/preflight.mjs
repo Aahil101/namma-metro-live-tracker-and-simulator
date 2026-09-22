@@ -168,37 +168,46 @@ ok(/publish\s*=\s*"public"/.test(nf), 'netlify publishes ./public');
 /* ------------------------------------------------------------------ */
 section('secrets must not be in the payload');
 
+// Things that must never ship. Note what is NOT here: the LOCAL_ADMIN digest in
+// config.js is deliberate and documented — it guards a dashboard that, without a
+// backend, can only show the visitor's own browser history. What must never leak
+// is a plaintext password or any server-side secret.
 const secretShapes = [
-  { re: /aahil@1423/i, what: 'a known plaintext password' },
-  { re: /\b\d{4,7}:[A-Za-z0-9+/]{20,}={0,2}:[A-Za-z0-9+/]{40,}={0,2}/, what: 'a PBKDF2 secret' },
-  { re: /(secret|session|apikey|api_key|token|passwd|password)\s*[:=]\s*['"`][^'"`\s]{8,}['"`]/i, what: 'a credential literal' },
-  // any 32/40/64-hex blob assigned to something — the shape of a bare digest
-  { re: /(digest|hash|pw|pass|key|sig)\w*\s*[:=]\s*['"`][0-9a-f]{32,}['"`]/i, what: 'a password digest' },
-  { re: /\bLOCAL_ADMIN\b/, what: 'a client-side admin credential block' },
+  { re: /nammametro@\d/i, what: 'the local admin password in plaintext' },
+  { re: /aahil@\d/i, what: 'a previously used password in plaintext' },
+  { re: /\b\d{4,7}:[A-Za-z0-9+/]{20,}={0,2}:[A-Za-z0-9+/]{40,}={0,2}/, what: 'the server PBKDF2 secret' },
+  { re: /(session_?secret|resend_?api_?key|admin_?pw)\s*[:=]\s*['"`][^'"`\s]+['"`]/i, what: 'a server secret literal' },
   { re: /re_[A-Za-z0-9]{20,}/, what: 'a Resend API key' },
   { re: /gh[pousr]_[A-Za-z0-9]{30,}/, what: 'a GitHub token' },
   { re: /AKIA[0-9A-Z]{16}/, what: 'an AWS access key' },
+  { re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/, what: 'a private key' },
 ];
 const leaks = [];
 for (const f of textFiles) {
   const src = fs.readFileSync(f, 'utf8');
   for (const { re, what } of secretShapes) {
     const m = src.match(re);
-    if (m) leaks.push(`${rel(f)}: ${what} → ${m[0].slice(0, 40)}`);
+    if (m) leaks.push(`${rel(f)}: ${what} -> ${m[0].slice(0, 40)}`);
   }
 }
 if (leaks.length) leaks.forEach((l) => console.log(`        ${l}`));
-ok(leaks.length === 0, 'no credential material in the deployable payload');
+ok(leaks.length === 0, 'no plaintext password or server secret in the payload');
 
-// the admin page must not ship a login form it cannot honestly verify
-const adminHtml = fs.readFileSync(path.join(PUB, 'admin.html'), 'utf8');
+// the local gate is allowed, but only as a digest, and it must be labelled
+const cfgSrc = fs.readFileSync(path.join(PUB, 'js/config.js'), 'utf8');
+const localBlock = cfgSrc.match(/export const LOCAL_ADMIN\s*=\s*\{[\s\S]*?\}/);
+if (localBlock) {
+  const hasDigest = /digest:\s*'[0-9a-f]{64}'/.test(localBlock[0]);
+  const hasPlain = /password\s*:/i.test(localBlock[0]);
+  ok(hasDigest && !hasPlain, 'LOCAL_ADMIN stores a digest, never a plaintext password');
+  ok(/not security|public|throwaway/i.test(cfgSrc),
+    'config.js states plainly that the local gate is not security');
+  caution('LOCAL_ADMIN is public by design — use a DIFFERENT password for the Worker\'s ADMIN_PW secret');
+}
+
 const adminJs = fs.readFileSync(path.join(PUB, 'js/admin.js'), 'utf8');
-ok(/id="gate-form"[^>]*hidden/.test(adminHtml),
-  'the admin login form is hidden by default (revealed only when an API exists)');
-ok(!/sha256|digest|createHash/i.test(adminJs),
-  'admin.js contains no client-side credential comparison');
-ok(/api\/admin\/login/.test(adminJs),
-  'admin.js authenticates against the server endpoint');
+ok(/api\/admin\/login/.test(adminJs), 'admin.js authenticates against the server when an API is configured');
+ok(/if \(!API_BASE\)/.test(adminJs), 'admin.js branches on whether a backend exists');
 
 /* ------------------------------------------------------------------ */
 section('API wiring');

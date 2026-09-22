@@ -43,3 +43,33 @@ export const OWNER_EMAIL = 'heworld2046@gmail.com';
 
 /** Send anonymous pageview / heartbeat beacons when the API is configured. */
 export const ANALYTICS_ENABLED = true;
+
+/**
+ * Admin credentials for the no-backend case.
+ *
+ * ⚠  READ THIS BEFORE CHANGING IT
+ *
+ * This repository is public, so these values are public. Anyone can read them,
+ * sign in to /admin.html, and see whatever the dashboard shows. That is an
+ * accepted trade-off here because without a backend the dashboard has nothing
+ * private to show: no traffic data exists, and the only feedback listed is
+ * whatever that same visitor's own browser queued offline.
+ *
+ * Two rules that keep this safe:
+ *
+ *   1. NEVER reuse this password anywhere else. It is a throwaway.
+ *   2. When you deploy the Worker (api/), set a DIFFERENT password as the
+ *      ADMIN_PW secret. Once API_BASE is set, these values are ignored
+ *      entirely and login is verified server-side, so the real dashboard —
+ *      with real traffic data and everyone's feedback — is never protected by
+ *      anything committed to this repo.
+ *
+ * The password is stored as a SHA-256 digest rather than plaintext. That is a
+ * speed bump, not security: it is offline-crackable and is not pretending
+ * otherwise.
+ */
+export const LOCAL_ADMIN = {
+  user: 'nammametro',
+  // sha256("nammametro:<password>:nml-local-v1")
+  digest: '109fc43eeca7e6dbce95f13d397567057c241934cfda0f782394ec4addc80ed8',
+};

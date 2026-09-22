@@ -46,10 +46,25 @@ if (missingImages.length) console.log(`        missing: ${missingImages.join(', 
 ok(missingImages.length === 0, 'every local image exists',
   `${localImages.length} local, ${images.length - localImages.length} remote badges`);
 
-// no mojibake, no replacement chars
+// no mojibake, no replacement chars — reuse the byte-wise detector rather than
+// a hand-written character class, which is what let 500 sequences through before
+const { detectMojibake } = await import('./audit-encoding.mjs').then(
+  (m) => ({ detectMojibake: m.detectMojibake }),
+).catch(() => ({ detectMojibake: null }));
+
 ok(!md.includes('\uFFFD'), 'no U+FFFD replacement characters');
-ok(!/[\u00C2-\u00C3][\u0080-\u00BF\u20AC\u2019\u201C\u201D\u2013\u2014]/.test(md),
-  'no cp1252 mojibake sequences');
+if (detectMojibake) {
+  const hits = detectMojibake(md);
+  if (hits) console.log(`        ${hits} mojibake sequence(s) — run: node tools/audit-encoding.mjs --fix`);
+  ok(hits === 0, 'no cp1252 mojibake sequences', hits ? `${hits} found` : '');
+} else {
+  ok(false, 'could not load the mojibake detector from audit-encoding.mjs');
+}
+
+// the ASCII diagrams must still be made of box-drawing characters
+const boxChars = ['\u2500', '\u2502', '\u250C', '\u2510', '\u2514', '\u2518', '\u25BC'];
+const boxCount = boxChars.reduce((n, c) => n + (md.split(c).length - 1), 0);
+ok(boxCount > 200, 'architecture diagrams still use box-drawing characters', `${boxCount} glyphs`);
 
 // tables must have a header separator or GitHub renders them as text
 const tableStarts = [...md.matchAll(/^\|[^\n]+\|\s*$/gm)];

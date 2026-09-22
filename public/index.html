@@ -50,12 +50,21 @@
   </div>
 
   <div class="topbar-right">
+    <div id="live-users" class="liveusers" hidden title="People viewing this map right now">
+      <span class="lu-dot"></span>
+      <span id="lu-count" class="lu-count">–</span>
+      <span class="lu-lbl">watching</span>
+    </div>
     <div class="stat">
       <span id="stat-trains" class="stat-num">0</span>
       <span class="stat-lbl">trains moving</span>
     </div>
     <button id="btn-live" class="btn btn-live is-live" title="Follow the real clock (L)">
       <span class="pulse"></span><span>LIVE</span>
+    </button>
+    <button id="btn-shrink" class="btn btn-icon" title="Shrink panels to the corners (Z)" aria-label="Shrink panels" aria-pressed="false">
+      <svg class="icon-shrink" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M4 9.5a1.1 1.1 0 0 0 2.2 0V7.7l3.3 3.3a1.1 1.1 0 0 0 1.6-1.6L7.8 6.1h1.7a1.1 1.1 0 0 0 0-2.2H5.1A1.1 1.1 0 0 0 4 5v4.5Zm16 5a1.1 1.1 0 0 0-2.2 0v1.8l-3.3-3.3a1.1 1.1 0 0 0-1.6 1.6l3.3 3.3h-1.7a1.1 1.1 0 0 0 0 2.2h4.4a1.1 1.1 0 0 0 1.1-1.1v-4.5Z"/></svg>
+      <svg class="icon-expand" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M14.5 4a1.1 1.1 0 0 0 0 2.2h1.8l-3.3 3.3a1.1 1.1 0 0 0 1.6 1.6l3.3-3.3v1.7a1.1 1.1 0 0 0 2.2 0V5.1A1.1 1.1 0 0 0 19 4h-4.5Zm-5 16a1.1 1.1 0 0 0 0-2.2H7.7l3.3-3.3a1.1 1.1 0 0 0-1.6-1.6l-3.3 3.3v-1.7a1.1 1.1 0 0 0-2.2 0v4.4A1.1 1.1 0 0 0 5 20h4.5Z"/></svg>
     </button>
     <button id="btn-theme" class="btn btn-icon" title="Switch theme (T)" aria-label="Switch between light and dark theme">
       <svg class="icon-moon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path fill="currentColor" d="M12.3 2.2a9.8 9.8 0 1 0 9.5 12.3 8 8 0 0 1-9.5-12.3Z"/></svg>
@@ -73,27 +82,47 @@
 <!-- ─────────────────────────────── left sidebar ────────────────────────────── -->
 <aside id="sidebar" class="sidebar">
 
-  <section class="card">
+  <section class="card" data-collapsible>
     <div class="card-head">
       <h2>Lines</h2>
-      <button id="btn-all-lines" class="linkbtn">show all</button>
-    </div>
-    <div id="line-list" class="line-list"></div>
-  </section>
-
-  <section class="card grow">
-    <div class="card-head">
-      <h2>Trains in motion</h2>
-      <div class="seg" role="tablist" aria-label="Sort trains">
-        <button class="seg-btn is-on" data-sort="line" role="tab">line</button>
-        <button class="seg-btn" data-sort="eta" role="tab">next stop</button>
+      <div class="head-tools">
+        <button id="btn-all-lines" class="linkbtn">show all</button>
+        <button class="card-fold btn btn-icon" title="Collapse" aria-label="Collapse section">–</button>
       </div>
     </div>
-    <input id="train-search" class="search" type="search" placeholder="Filter by station or destination…" autocomplete="off" />
-    <div id="train-list" class="train-list" role="list"></div>
+    <div class="card-body">
+      <div id="line-list" class="line-list"></div>
+    </div>
+  </section>
+
+  <section class="card grow" data-collapsible>
+    <div class="card-head">
+      <h2>Trains in motion</h2>
+      <div class="head-tools">
+        <div class="seg" role="tablist" aria-label="Sort trains">
+          <button class="seg-btn is-on" data-sort="line" role="tab">line</button>
+          <button class="seg-btn" data-sort="eta" role="tab">next stop</button>
+        </div>
+        <button class="card-fold btn btn-icon" title="Collapse" aria-label="Collapse section">–</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <input id="train-search" class="search" type="search" placeholder="Filter by station or destination…" autocomplete="off" />
+      <div id="train-list" class="train-list" role="list"></div>
+    </div>
   </section>
 
 </aside>
+
+<!-- corner chips shown while shrunk, to bring panels back -->
+<div id="shrunk-bar" class="shrunk-bar" hidden>
+  <button id="chip-panels" class="chip" title="Show panels (Z)">
+    <span class="chip-ico">☰</span><span id="chip-count">0</span><span class="chip-lbl">trains</span>
+  </button>
+  <button id="chip-time" class="chip" title="Show time controls">
+    <span class="chip-ico">⏱</span><span id="chip-clock" class="chip-lbl mono">--:--</span>
+  </button>
+</div>
 
 <!-- ───────────────────────── right panel: station board ────────────────────── -->
 <aside id="station-panel" class="station-panel" hidden>
