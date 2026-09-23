@@ -11,7 +11,7 @@ codes so you can watch a friend's train.
 No build step · no npm dependencies · no backend required · no API keys
 
 [![dependencies](https://img.shields.io/badge/runtime%20dependencies-0-2ea44f?style=flat-square)](#tech-stack)
-[![tests](https://img.shields.io/badge/tests-360%20passing-2ea44f?style=flat-square)](#tests)
+[![tests](https://img.shields.io/badge/tests-380%20passing-2ea44f?style=flat-square)](#tests)
 [![build step](https://img.shields.io/badge/build%20step-none-4da3ff?style=flat-square)](#why-no-framework)
 [![payload](https://img.shields.io/badge/payload-1.45%20MB-4da3ff?style=flat-square)](#performance-budget)
 [![data](https://img.shields.io/badge/timetable-BMRCL%20GTFS-8C2877?style=flat-square)](#where-the-data-comes-from)
@@ -44,6 +44,8 @@ need a framework, a bundler, or a node_modules folder.
 | **Share a train** | a code like `MTR-4K7P-2XQ8`, or a link — the recipient sees that train ringed and labelled while the rest of the fleet fades back |
 | **Peak / off-peak** | current headway per line, plus a frequency-by-time-of-day table derived from the timetable itself |
 | **Time travel** | play / pause, slow motion to 0.25×, fast-forward to 32×, or any custom rate up to 240× — displayed as a signed notch (`−2` … `0` … `+6`) beside the multiplier |
+| **Works & restrictions** | engineering works are drawn as a yellow/black hazard overlay with a speed-limit label, and trains visibly crawl through them with the delay carried down the rest of the run |
+| **You can correct it** | tap a train, mark it as already arrived, and the run shifts to match what you actually saw — with a red strip making clear those times are yours, not BMRCL's |
 | **Light & dark** | full theme swap including the basemap; line colours darken so the Yellow Line stays legible on a pale map |
 | **Shrink mode** | fold every panel out to the edges for a full-bleed map, leaving two corner chips that keep the live train count and clock |
 | **Live viewers** | a "N watching" pill when the optional API is deployed — hidden rather than faked without it |
@@ -55,8 +57,12 @@ need a framework, a bundler, or a node_modules folder.
 <td width="50%"><img src="docs/tracking.png" alt="Tracking a shared train"><br><em>Tracking a friend's train — the rest of the fleet fades</em></td>
 </tr>
 <tr>
+<td><img src="docs/maintenance.png" alt="Engineering works overlay"><br><em>Engineering works: hazard stripes, speed limit, trains crawl through</em></td>
+<td><img src="docs/mobile.png" alt="Mobile layout"><br><em>Phone layout — panels folded, map first</em></td>
+</tr>
+<tr>
 <td><img src="docs/light.png" alt="Light theme"><br><em>Light theme on the standard basemap</em></td>
-<td><img src="docs/mobile.png" alt="Mobile layout"><br><em>Phone layout</em></td>
+<td><img src="docs/shrink.png" alt="Shrink mode"><br><em>Shrink mode: everything folds to the corners</em></td>
 </tr>
 </table>
 
@@ -103,10 +109,42 @@ What this does instead:
 ### Known limits
 
 - **Intermediate station times are modelled.** BMRCL publishes terminal times only. Times
-  between termini are derived from stop spacing, dwell time and average speed. Expect a
-  minute or two of drift against the train in front of you.
-- **Delays cannot be detected.** During a disruption the map is confidently wrong.
+  between termini are derived from stop spacing, dwell time and average speed, and the error
+  grows with distance from the terminus. Measured at Beratena Agrahara — stop 6 of 16 on the
+  Yellow Line — the feed says `09:02:46` where the train actually arrived around `09:01`.
+  Every dwell in the feed is exactly 26 s and every hop is 38–41 km/h, which is a clear sign
+  of synthesis rather than observation.
+
+  This is a modelling limit, not stale data: the feed matches the newest upstream release.
+  So the app lets you fix it — see [correcting the timings](#correcting-the-timings).
+
+- **Delays cannot be detected.** There is no live feed, so an unplanned delay is invisible.
+  Known *planned* restrictions are configured by hand in
+  [`public/js/maintenance.js`](public/js/maintenance.js).
+
 - **Don't use it to catch your last train.**
+
+<a name="correcting-the-timings"></a>
+### Correcting the timings
+
+Tap a train, then **“already arrived? \<station\>”** when the app is behind what you can see
+on the platform. That is a measurement, and it is treated as one:
+
+```
+offset = observed arrival - scheduled arrival        (negative = running early)
+```
+
+- that exact run shifts by the offset for the rest of its journey
+- other trains on the same line and direction inherit the **median** of your recent
+  observations, as a weaker `inferred` correction
+- trains on other lines are left on the published timetable
+- everything expires after six hours, lives only in your browser, and is never uploaded
+- a **red strip** across the top states that what you are seeing is your correction, not
+  BMRCL's timetable
+
+Corrections can be exported as JSON, which is the right shape for filing upstream at
+[Vonter/bmrcl-gtfs](https://github.com/Vonter/bmrcl-gtfs) — that project accepts manual
+timetable corrections, so a measurement made once can fix the data for everyone.
 
 The schedule layer is isolated behind the `Simulation` class. If BMRCL ever opens a
 GTFS-Realtime feed, it can be substituted without touching the map or the UI.
@@ -377,6 +415,8 @@ public/                  <- the deployable site; everything below is optional to
     analytics.js         anonymous beacons (no-op without an API)
     feedback.js          submit + offline queue + mailto fallback
     visits.js            local visit history; live-viewer poll when an API exists
+    observations.js      user-reported arrivals -> schedule corrections
+    maintenance.js       speed restrictions and engineering works
     admin.js             dashboard; hand-rolled SVG charts
     config.js            <- the one file you edit after deploying the API
   data/                  built artefacts, committed (the site needs them)
@@ -388,7 +428,7 @@ tools/
   verify.mjs             data integrity report
   test-sim.mjs           82 engine assertions
   test-api.mjs           51 Worker auth / routing assertions
-  browser-check.mjs      178 end-to-end assertions in real Chrome over CDP
+  browser-check.mjs      207 end-to-end assertions in real Chrome over CDP
   screenshot.mjs         capture the running app
   hash-password.mjs      derive the admin secret
   serve.mjs              static dev server
@@ -498,13 +538,13 @@ Tighten `ALLOWED_ORIGINS` in `wrangler.toml` to your site's origin once you know
 
 ## Tests
 
-360 assertions, no test framework, nothing to install.
+380 assertions, no test framework, nothing to install.
 
 ```bash
 node tools/test-sim.mjs        #  82  engine: geometry, continuity, boards, share codes
 node tools/test-api.mjs        #  51  Worker: PBKDF2, tokens, routing, input clamping
 node tools/preflight.mjs       #  40  deploy readiness + secret scan
-node tools/browser-check.mjs   # 178  end-to-end in real headless Chrome
+node tools/browser-check.mjs   # 207  end-to-end in real headless Chrome
 node tools/verify.mjs          #      data integrity report
 ```
 

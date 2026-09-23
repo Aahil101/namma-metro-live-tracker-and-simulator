@@ -13,6 +13,10 @@ import { applyTheme } from './theme.js';
 import { sendFeedback, mailtoLink } from './feedback.js';
 import { liveUsers } from './visits.js';
 import { API_BASE } from './config.js';
+import {
+  markArrived, buildCorrections, offsetResolver, describeCorrections,
+  clearObservations, exportObservations, allObservations,
+} from './observations.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -229,16 +233,37 @@ export class UI {
     /* ---- per-card collapse ---- */
     for (const card of document.querySelectorAll('.card[data-collapsible]')) {
       const btn = card.querySelector('.card-fold');
+      const head = card.querySelector('.card-head');
       if (!btn) continue;
-      btn.textContent = '\u2013';                       // en dash = collapse
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const folded = card.classList.toggle('is-folded');
+
+      const setFolded = (folded) => {
+        card.classList.toggle('is-folded', folded);
         btn.textContent = folded ? '+' : '\u2013';
         btn.title = folded ? 'Expand' : 'Collapse';
         btn.setAttribute('aria-expanded', String(!folded));
+        // once the user touches a card, stop the mobile auto-fold overriding it
+        document.body.classList.remove('mobile-first-load');
+      };
+      setFolded(false);
+
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setFolded(!card.classList.contains('is-folded'));
+      });
+
+      // On a phone the whole header is the target — a 22px button is too small.
+      // Interactive controls inside the header must still work.
+      head.addEventListener('click', (e) => {
+        if (e.target.closest('.seg, .linkbtn, input, .card-fold')) return;
+        setFolded(!card.classList.contains('is-folded'));
       });
     }
+
+    /* ---- mark-arrived (ground truth) ---- */
+    $('tp-mark-btn').addEventListener('click', () => this.markArrivedNow());
+    $('tp-mark-undo').addEventListener('click', () => this.undoMark());
+    $('cs-clear').addEventListener('click', () => this.resetCorrections());
+    $('cs-export').addEventListener('click', () => this.exportCorrections());
 
     /* ---- feedback ---- */
     $('btn-feedback').addEventListener('click', () => this.openFeedback());
@@ -518,6 +543,103 @@ export class UI {
     setInterval(() => {
       if (document.visibilityState === 'visible') this.pollLiveUsers();
     }, 30_000);
+  }
+
+  /**
+   * Keep --topbar-h and --timebar-h equal to what those bars actually measure.
+   *
+   * Everything else is positioned with calc() against them, and they were
+   * hardcoded guesses: once the playbar wrapped to a second row the time bar
+   * became 150px tall while the variable still said 96px, so the sidebar sat on
+   * top of it. Measuring removes that whole class of bug.
+   */
+  observeChrome() {
+    const root = document.documentElement;
+    const topbar = document.querySelector('.topbar');
+    const timebar = document.querySelector('.timebar');
+    if (!topbar || !timebar) return;
+
+    const apply = () => {
+      const th = Math.round(topbar.getBoundingClientRect().height);
+      const bh = Math.round(timebar.getBoundingClientRect().height);
+      if (th > 0) root.style.setProperty('--topbar-h', `${th}px`);
+      // the bar is inset 10px from the bottom, so reserve that too
+      if (bh > 0) root.style.setProperty('--timebar-h', `${bh + 10}px`);
+    };
+
+    apply();
+    if (typeof ResizeObserver === 'function') {
+      const ro = new ResizeObserver(apply);
+      ro.observe(topbar);
+      ro.observe(timebar);
+      this._chromeObserver = ro;
+    }
+    window.addEventListener('resize', apply);
+    window.addEventListener('orientationchange', () => setTimeout(apply, 120));
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Ground-truth corrections
+   * ------------------------------------------------------------------ */
+
+  /**
+   * The user is standing at a station and the train has already got there,
+   * while the app still shows it short of the platform. Record that as a
+   * measurement and shift the run — the feed's intermediate times are modelled,
+   * so an observation on the spot beats the model.
+   */
+  markArrivedNow() {
+    const s = this.state;
+    const train = s.selectedTrainId ? s.trainsById.get(s.selectedTrainId) : null;
+    if (!train || train.nextIdx == null) return;
+
+    const pattern = this.sim.patterns[train.patternIdx];
+    markArrived(train, pattern, train.nextIdx, s.live ? s.istSec : s.simTime);
+    this.reloadCorrections();
+
+    const name = this.sim.stations[train.nextStation]?.name ?? '';
+    const btn = $('tp-mark-btn');
+    btn.innerHTML = `recorded at <strong>${esc(name)}</strong>`;
+    setTimeout(() => this.updateTrainPanel(s.trainsById.get(s.selectedTrainId)), 1400);
+  }
+
+  undoMark() {
+    const s = this.state;
+    const train = s.selectedTrainId ? s.trainsById.get(s.selectedTrainId) : null;
+    const list = allObservations().filter((o) => o.trainId !== (train?.id ?? ''));
+    try { localStorage.setItem('nml.observations', JSON.stringify(list)); } catch { /* ignore */ }
+    this.reloadCorrections();
+  }
+
+  resetCorrections() {
+    clearObservations();
+    this.reloadCorrections();
+  }
+
+  exportCorrections() {
+    const data = exportObservations();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `namma-metro-observations-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  /** Rebuild the correction index and hand it to the simulation. */
+  reloadCorrections() {
+    const corr = buildCorrections();
+    this.state.corrections = corr;
+    this.sim.setOffsetResolver(offsetResolver(corr));
+    this.renderCorrectionStrip();
+  }
+
+  renderCorrectionStrip() {
+    const info = describeCorrections(this.state.corrections);
+    const strip = $('correction-strip');
+    if (!info) { strip.hidden = true; return; }
+    strip.hidden = false;
+    $('cs-text').textContent = info.text;
   }
 
   /* ------------------------------------------------------------------ *
@@ -1022,7 +1144,10 @@ export class UI {
 
     const statusEl = $('tp-status');
     if (train.status === 'moving') {
-      statusEl.innerHTML = `departed ${hhmm(train.startAbs)} · ${train.distKm.toFixed(1)} of ${train.totalKm.toFixed(1)} km · <span class="hl">en route</span>`;
+      const restricted = train.restrictedNow
+        ? ` · <span class="hl-warn">${esc(train.restriction.label.toLowerCase())} ${train.restriction.maxSpeedKmh} km/h</span>`
+        : '';
+      statusEl.innerHTML = `departed ${hhmm(train.startAbs)} · ${train.distKm.toFixed(1)} of ${train.totalKm.toFixed(1)} km · <span class="hl">en route</span>${restricted}`;
     } else if (train.status === 'dwelling') {
       statusEl.innerHTML = `<span class="hl">at ${esc(sim.stations[train.atStation]?.name ?? '')}</span> · doors close in ${countdown(train.dwellLeft)}`;
     } else {
@@ -1032,12 +1157,53 @@ export class UI {
     // speed + gauge (Namma Metro trains are limited to 80 km/h)
     $('tp-speed').textContent = train.status === 'moving' ? `${Math.round(train.speedKmh)} km/h` : '0 km/h';
     $('tp-gauge-bar').style.width = `${Math.min(100, (train.speedKmh / 80) * 100).toFixed(0)}%`;
-    $('tp-gauge-bar').style.background = train.status === 'moving' ? 'var(--live)' : 'var(--txt-3)';
+    $('tp-gauge-bar').style.background = train.restrictedNow
+      ? 'var(--peak-txt)'
+      : (train.status === 'moving' ? 'var(--live)' : 'var(--txt-3)');
 
     $('tp-next').textContent = train.nextStation
       ? sim.stations[train.nextStation]?.name ?? '—'
       : 'end of run';
     $('tp-eta').textContent = train.nextStation ? countdown(train.etaNext) : '—';
+
+    /* ---- ground truth: "already arrived?" ---- */
+    const markBtn = $('tp-mark-btn');
+    const nextName = train.nextStation ? sim.stations[train.nextStation]?.name : null;
+    const ownMark = this.state.corrections?.byTrain?.has(train.id);
+
+    if (nextName && train.status !== 'arrived') {
+      $('tp-mark').hidden = false;
+      markBtn.disabled = false;
+      markBtn.innerHTML = `already arrived? <strong>${esc(nextName)}</strong>`;
+      markBtn.title = `Tell the map this train has already reached ${nextName}`;
+    } else {
+      $('tp-mark').hidden = true;
+    }
+    $('tp-mark-undo').hidden = !ownMark;
+
+    /* ---- adjustment / restriction notice ---- */
+    const adj = $('tp-adjusted');
+    const tm = sim.timing(train.patternIdx);
+    const notes = [];
+    if (train.adjustSec) {
+      const mag = countdown(Math.abs(train.adjustSec));
+      const dir = train.adjustSec < 0 ? 'ahead of' : 'behind';
+      notes.push(train.adjustKind === 'exact'
+        ? `<strong>Shifted ${mag} ${dir} the timetable</strong> because you marked this train.`
+        : `<strong>Shifted ${mag} ${dir} the timetable</strong> from your reports on this line.`);
+    }
+    if (tm.delayed > 0) {
+      notes.push(`<strong>+${Math.round(tm.delayed)}s</strong> from the speed restriction between `
+        + `${esc(sim.stations[train.restriction?.from ?? '']?.name ?? 'RV Road')} and `
+        + `${esc(sim.stations[train.restriction?.to ?? '']?.name ?? 'Jayanagar')}.`);
+    }
+    if (notes.length) {
+      adj.hidden = false;
+      adj.innerHTML = notes.join('<br>')
+        + '<span class="ta-sub">These times are not the published timetable.</span>';
+    } else {
+      adj.hidden = true;
+    }
 
     // ---- strip map ----
     if (this.stripTrainId !== train.id) this._buildStrip(train);

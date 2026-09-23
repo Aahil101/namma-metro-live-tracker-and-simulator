@@ -515,6 +515,7 @@ html, body {
 .tp-route { font-size: .93rem; font-weight: 650; letter-spacing: -.015em; line-height: 1.3; }
 .tp-status { font-size: .705rem; color: var(--txt-2); margin-top: 3px; }
 .tp-status .hl { color: var(--live); font-weight: 620; }
+.tp-status .hl-warn { color: var(--peak-txt); font-weight: 650; }
 
 .tp-stats {
   display: grid; grid-template-columns: auto 1fr auto; gap: 12px;
@@ -857,6 +858,54 @@ body.is-shrunk .maplibregl-ctrl-bottom-left { bottom: 10px !important; }
 /* sort control is meaningless while the list is hidden */
 .card.is-folded .seg { display: none; }
 
+/* ----------------- ground-truth correction (mark arrived) --------------- */
+.tp-mark { display: flex; gap: 7px; padding: 0 12px 10px; }
+.btn-mark {
+  flex: 1; text-align: left;
+  background: var(--peak-tint); border-color: var(--peak-edge); color: var(--peak-txt);
+}
+.btn-mark:hover { background: var(--peak-tint); border-color: var(--peak-txt); }
+.btn-mark strong { font-weight: 700; }
+.btn-mark[disabled] { opacity: .45; cursor: default; }
+
+.tp-adjusted {
+  margin: 0 12px 10px; padding: 8px 10px; border-radius: var(--r-sm);
+  font-size: .72rem; line-height: 1.5;
+  background: var(--bad-tint); border: 1px solid var(--bad-edge); color: var(--bad-txt);
+}
+.tp-adjusted strong { font-weight: 700; }
+.tp-adjusted .ta-sub { display: block; margin-top: 3px; color: var(--txt-3); font-size: .68rem; }
+
+/* the red strip shown while any correction is in force */
+.correction-strip {
+  position: fixed; z-index: 57; left: 50%; transform: translateX(-50%);
+  top: calc(var(--topbar-h) + 10px);
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 13px; border-radius: 99px; max-width: min(620px, calc(100vw - 24px));
+  background: var(--bad-tint); border: 1px solid var(--bad-edge);
+  backdrop-filter: blur(14px); box-shadow: var(--shadow);
+  font-size: .73rem; color: var(--bad-txt);
+  animation: slideIn .24s cubic-bezier(.32,.72,0,1);
+}
+.cs-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px;
+  background: var(--bad-txt); animation: pulse 1.9s ease-out infinite;
+}
+.cs-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-link { font-size: .69rem; flex: 0 0 auto; color: var(--bad-txt); text-decoration-color: currentColor; }
+.cs-link:hover { color: var(--txt); }
+body.is-shrunk .correction-strip { top: 10px; }
+
+/* restricted / adjusted markers in the strip map */
+.strip-stop.restricted .ss-name::after {
+  content: ' ~';
+  color: var(--peak-txt); font-weight: 700;
+}
+.ss-booked {
+  font-family: var(--mono); font-size: .62rem; color: var(--txt-3);
+  text-decoration: line-through; margin-right: 4px;
+}
+
 /* ============================== modal ================================== */
 .modal {
   position: fixed; inset: 0; z-index: 200; display: grid; place-items: center;
@@ -922,14 +971,22 @@ table.tbl tr.now td { background: var(--live-wash); color: var(--txt); }
 @media (max-width: 900px) {
   :root { --topbar-h: 56px; --timebar-h: 96px; }
   .only-mobile { display: grid; }
-  .topbar { gap: 8px; padding: 0 9px; }
-  /* just the logo mark — the wordmark collides with the clock at this width */
+
+  /* Let the bar grow and give the clock its own row. Six icon buttons plus a
+     clock plus the wordmark cannot share 412px without the logo being crushed,
+     and --topbar-h is measured from the DOM so the panels follow. */
+  .topbar { height: auto; min-height: 56px; flex-wrap: wrap; row-gap: 2px; padding: 7px 9px; }
+  .brand { flex: 0 0 auto; }
   .brand-text { display: none; }
-  .clock { font-size: 1rem; }
+  .clockbox { order: 10; flex: 1 0 100%; text-align: left; }
+  .clock { font-size: .98rem; display: inline; }
+  .clock-sub { justify-content: flex-start; flex-wrap: wrap; margin-top: 0; display: inline-flex; margin-left: 8px; }
   .stat { display: none; }
-  .topbar-right { gap: 6px; }
+  .topbar-right { flex: 1 1 auto; justify-content: flex-end; gap: 5px; }
   .btn-icon { width: 30px; height: 30px; font-size: .92rem; }
   .btn-live { padding: 6px 9px; font-size: .66rem; gap: 6px; }
+  .liveusers { padding: 4px 8px 4px 6px; }
+  .lu-lbl { display: none; }
 
   .sidebar {
     left: 8px; right: 8px; width: auto;
@@ -948,6 +1005,14 @@ table.tbl tr.now td { background: var(--live-wash); color: var(--txt); }
   body.panel-station .sidebar {
     transform: translateY(calc(100% + 20px)); opacity: 0; pointer-events: none;
   }
+  /* on a phone the cards start folded so the map is the first thing you see;
+     tapping a header opens one */
+  body.mobile-first-load .card[data-collapsible] .card-body { display: none; }
+  .card-head { cursor: pointer; }
+  .card-head h2::after {
+    content: ' ▾'; font-size: .8em; color: var(--txt-3);
+  }
+  .card.is-folded .card-head h2::after { content: ' ▸'; }
   .tracking-chip { left: 8px; right: 8px; max-width: none; bottom: calc(var(--timebar-h) + 12px); }
   .datanote { display: none; }
   .timebar { left: 8px; right: 8px; bottom: 8px; }

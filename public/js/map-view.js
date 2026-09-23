@@ -15,6 +15,7 @@
  */
 
 import { mapTheme } from './theme.js';
+import { restrictionGeometry } from './maintenance.js';
 
 const mlgl = globalThis.maplibregl;
 if (!mlgl) {
@@ -145,6 +146,7 @@ export class MetroMap {
     this._addIcons();
     this._addScrim();
     this._addLines();
+    this._addMaintenance();
     this._addStations();
     this._addTrains();
     this._applyVisibility();
@@ -230,6 +232,81 @@ export class MetroMap {
         'line-color': ['get', 'color'],
         'line-width': ['interpolate', ['linear'], ['zoom'], 9, 2.6, 12, 5, 15, 8.5, 17, 13],
         'line-opacity': this.t.lineOpacity,
+      },
+    });
+  }
+
+  /**
+   * Hazard overlay on stretches under a speed restriction.
+   *
+   * Two complementary dashed layers (black `[2,2]`, yellow `[0,2,2]` so it
+   * starts with a gap) sit on top of the line at about 60% of its width, so the
+   * line colour still shows along both edges — green/yellow/black, which reads
+   * as engineering works rather than as a third metro line.
+   */
+  _addMaintenance() {
+    const sections = restrictionGeometry(this.network, this.schedule);
+    const features = sections.map((s) => ({
+      type: 'Feature',
+      properties: {
+        id: s.restriction.id,
+        line: s.restriction.line,
+        label: `${s.restriction.label}  ${s.restriction.maxSpeedKmh} km/h`,
+        speed: s.restriction.maxSpeedKmh,
+      },
+      geometry: { type: 'LineString', coordinates: s.coords },
+    }));
+
+    this.maintenanceSections = sections;
+    this.map.addSource('maintenance', { type: 'geojson', data: { type: 'FeatureCollection', features } });
+
+    if (!features.length) return;
+
+    const W = ['interpolate', ['linear'], ['zoom'], 9, 1.6, 12, 3.2, 15, 5.4, 17, 8];
+
+    this.map.addLayer({
+      id: 'maint-black',
+      type: 'line',
+      source: 'maintenance',
+      layout: { 'line-cap': 'butt', 'line-join': 'round' },
+      paint: {
+        'line-color': '#101215',
+        'line-width': W,
+        'line-dasharray': [2, 2],
+      },
+    });
+
+    this.map.addLayer({
+      id: 'maint-yellow',
+      type: 'line',
+      source: 'maintenance',
+      layout: { 'line-cap': 'butt', 'line-join': 'round' },
+      paint: {
+        'line-color': '#FFD21E',
+        'line-width': W,
+        // leading zero-length dash shifts the pattern into the black gaps
+        'line-dasharray': [0, 2, 2],
+      },
+    });
+
+    this.map.addLayer({
+      id: 'maint-label',
+      type: 'symbol',
+      source: 'maintenance',
+      layout: {
+        'symbol-placement': 'line-center',
+        'text-field': ['get', 'label'],
+        'text-font': ['literal', ['Noto Sans Bold']],
+        'text-size': ['interpolate', ['linear'], ['zoom'], 10, 9, 13, 11, 16, 13],
+        'text-offset': [0, 1.6],
+        'text-letter-spacing': 0.08,
+        'text-allow-overlap': false,
+        'text-padding': 2,
+      },
+      paint: {
+        'text-color': '#FFD21E',
+        'text-halo-color': this.themeId === 'light' ? '#ffffff' : '#101215',
+        'text-halo-width': 2.2,
       },
     });
   }
@@ -565,6 +642,9 @@ export class MetroMap {
     if (!this.map.getLayer('line-body')) return;
     const filter = ['in', ['get', 'line'], ['literal', [...this.visibleLines]]];
     for (const id of ['line-casing', 'line-body', 'line-glow']) this.map.setFilter(id, filter);
+    for (const id of ['maint-black', 'maint-yellow', 'maint-label']) {
+      if (this.map.getLayer(id)) this.map.setFilter(id, filter);
+    }
 
     const stationFilter = ['any', ...[...this.visibleLines].map((l) => ['in', l, ['get', 'lines']])];
     for (const id of ['station-halo', 'station-core', 'station-label', 'station-hit']) {

@@ -236,6 +236,16 @@
     <button id="tp-share" class="btn btn-sm btn-accent" title="Get a code your friends can use">share this train</button>
   </div>
 
+  <!-- ground-truth correction: the feed models intermediate times, so a rider
+       on the spot is a better source than the model -->
+  <div id="tp-mark" class="tp-mark">
+    <button id="tp-mark-btn" class="btn btn-sm btn-mark">
+      already arrived? <strong id="tp-mark-station">—</strong>
+    </button>
+    <button id="tp-mark-undo" class="btn btn-sm" hidden>undo</button>
+  </div>
+  <div id="tp-adjusted" class="tp-adjusted" hidden></div>
+
   <div class="tp-striphead">
     <span>line ahead</span>
     <span id="tp-remaining" class="tp-remaining">—</span>
@@ -259,6 +269,13 @@
   </span>
   <button id="tc-goto" class="btn btn-icon" title="Jump to this train" aria-label="Jump to train">⌖</button>
   <button id="tc-stop" class="btn btn-icon" title="Stop tracking" aria-label="Stop tracking">×</button>
+</div>
+
+<div id="correction-strip" class="correction-strip" hidden>
+  <span class="cs-dot"></span>
+  <span id="cs-text" class="cs-text">—</span>
+  <button id="cs-export" class="linkbtn cs-link">export</button>
+  <button id="cs-clear" class="linkbtn cs-link">reset</button>
 </div>
 
 <!-- ───────────────────────────── feedback modal ───────────────────────────── -->

@@ -14,6 +14,7 @@
 
 import { pointAtDistance } from './geometry.js';
 import { hhmm, SEC_PER_DAY } from './clock.js';
+import { buildRestrictionIndex } from './maintenance.js';
 
 /* ------------------------------------------------------------------ *
  *  Speed profile
@@ -43,6 +44,55 @@ function speedFraction(tf) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Speed-restricted segments
+ * ------------------------------------------------------------------ */
+
+/**
+ * Split one station-to-station hop into sub-legs when a speed restriction
+ * overlaps it, allocating each leg the time it actually needs.
+ *
+ * The restricted leg gets `length / maxSpeed` seconds; whatever time remains is
+ * shared between the free legs in proportion to their length. If the booked time
+ * is too short to honour the restriction at all, the restriction wins and the
+ * train runs late — which is the physically honest outcome, flagged as `late`.
+ *
+ * @returns {{legs: Array<{d0,d1,t0,t1,restricted:boolean}>, late: number}}
+ */
+function buildLegs(d0, d1, span, restriction, rKmFrom, rKmTo) {
+  const segLen = d1 - d0;
+  const lo = Math.max(d0, Math.min(rKmFrom, rKmTo));
+  const hi = Math.min(d1, Math.max(rKmFrom, rKmTo));
+  const rLen = Math.max(0, hi - lo);
+
+  if (rLen <= 1e-6 || segLen <= 0) return null;   // no overlap
+
+  // seconds the restricted stretch needs at the permitted speed
+  const rNeed = (rLen / restriction.maxSpeedKmh) * 3600 + (restriction.extraDelaySec || 0);
+  const freeLen = segLen - rLen;
+  let freeTime = span - rNeed;
+  let late = 0;
+
+  if (freeTime < 0) {
+    // cannot fit: keep the restriction, accept arriving late
+    late = -freeTime;
+    freeTime = 0;
+  }
+
+  const legs = [];
+  const beforeLen = lo - d0;
+  const afterLen = d1 - hi;
+  const shareBefore = freeLen > 0 ? (beforeLen / freeLen) * freeTime : 0;
+  const shareAfter = freeLen > 0 ? (afterLen / freeLen) * freeTime : 0;
+
+  let t = 0;
+  if (beforeLen > 1e-6) { legs.push({ d0, d1: lo, t0: t, t1: t + shareBefore, restricted: false }); t += shareBefore; }
+  legs.push({ d0: lo, d1: hi, t0: t, t1: t + rNeed, restricted: true }); t += rNeed;
+  if (afterLen > 1e-6) { legs.push({ d0: hi, d1, t0: t, t1: t + shareAfter, restricted: false }); }
+
+  return { legs, late, total: t + (afterLen > 1e-6 ? shareAfter : 0) };
+}
+
+/* ------------------------------------------------------------------ *
  *  Small sorted-array helpers
  * ------------------------------------------------------------------ */
 
@@ -67,6 +117,13 @@ function lowerBound(arr, target) {
 }
 
 const LINE_ABBR = { PURPLE: 'PU', GREEN: 'GR', YELLOW: 'YL' };
+
+/**
+ * A user correction can shift a run by up to ±15 minutes, so the candidate
+ * search window has to be widened by that much in both directions or a shifted
+ * train would be missed entirely at the edges.
+ */
+const OFFSET_SLACK = 15 * 60;
 
 /** Frequency windows used for the peak / off-peak breakdown. */
 export const WINDOWS = [
@@ -139,6 +196,109 @@ export class Simulation {
 
     this._profileCache = new Map();
     this._windowCache = new Map();
+
+    /**
+     * Speed restrictions, keyed `LINE|from|to`. Rebuilt on demand so a date
+     * change (or an edited maintenance list) is picked up without a reload.
+     */
+    this.restrictions = buildRestrictionIndex();
+
+    /**
+     * Optional correction source, installed by the app from user observations.
+     * Signature: (trainId, line, dir) => { offset:number, kind:string } | null
+     */
+    this.offsetFor = null;
+
+    this._timing = new Map();
+    this._rKmCache = new Map();
+    this._buildTimings();
+  }
+
+  /**
+   * Per-pattern effective timings once speed restrictions are applied.
+   *
+   * A restriction can make a hop take longer than the timetable books for it —
+   * 0.88 km at 25 km/h needs 127 s where the Green Line books 79 s. That extra
+   * time has to propagate to every later stop, otherwise the train would crawl
+   * through the restriction and then snap forward to hit its booked arrival.
+   *
+   * Result per pattern: `{ arr, dep, rdelay, runtime, endRel, delayed }`, where
+   * `rdelay[i]` is the seconds accumulated by the time it reaches stop i.
+   * Patterns with no restriction reuse the feed arrays untouched.
+   */
+  _buildTimings() {
+    this._timing.clear();
+
+    this.patterns.forEach((p, pi) => {
+      const n = p.stops.length;
+      let rdelay = null;
+
+      for (let i = 0; i < n - 1; i++) {
+        const r = this.restrictionFor(p.line, p.stops[i], p.stops[i + 1]);
+        if (!r) continue;
+        const geom = this._restrictionKm(p, r);
+        if (!geom) continue;
+
+        const d0 = p.dist[i], d1 = p.dist[i + 1];
+        const lo = Math.max(d0, geom.from);
+        const hi = Math.min(d1, geom.to);
+        const rLen = Math.max(0, hi - lo);
+        if (rLen <= 1e-6) continue;
+
+        const span = p.arr[i + 1] - p.dep[i];
+        const rNeed = (rLen / r.maxSpeedKmh) * 3600 + (r.extraDelaySec || 0);
+        const freeLen = (d1 - d0) - rLen;
+        // time the unrestricted remainder needs at the booked average speed
+        const freeNeed = freeLen > 0 ? (freeLen / Math.max(1e-9, (d1 - d0) / span)) : 0;
+        const extra = Math.max(0, (rNeed + freeNeed) - span);
+        if (extra <= 0) continue;
+
+        if (!rdelay) rdelay = new Array(n).fill(0);
+        for (let k = i + 1; k < n; k++) rdelay[k] += extra;
+      }
+
+      if (!rdelay) {
+        this._timing.set(pi, {
+          arr: p.arr, dep: p.dep, rdelay: null,
+          runtime: p.runtime, endRel: this.endRel[pi], delayed: 0,
+        });
+        return;
+      }
+
+      const arr = p.arr.map((v, i) => v + rdelay[i]);
+      const dep = p.dep.map((v, i) => v + rdelay[i]);
+      const runtime = arr[n - 1];
+      this._timing.set(pi, {
+        arr, dep, rdelay,
+        runtime,
+        endRel: Math.max(runtime, dep[n - 1]),
+        delayed: rdelay[n - 1],
+      });
+    });
+
+    // the candidate-search window must cover the longest *effective* run
+    this.maxRuntime = Math.max(
+      this.maxRuntime,
+      ...[...this._timing.values()].map((t) => t.endRel),
+    );
+  }
+
+  /** Effective timing for a pattern, restrictions included. */
+  timing(pi) { return this._timing.get(pi); }
+
+  /** Install (or clear) the user-observation correction resolver. */
+  setOffsetResolver(fn) { this.offsetFor = typeof fn === 'function' ? fn : null; }
+
+  /** Refresh the restriction index and recompute timings, e.g. after midnight. */
+  refreshRestrictions(date = new Date()) {
+    this.restrictions = buildRestrictionIndex(date);
+    this._rKmCache.clear();
+    this._buildTimings();
+  }
+
+  /** The restriction on the hop between two station ids, if any. */
+  restrictionFor(line, fromStation, toStation) {
+    return this.restrictions.get(`${line}|${fromStation}|${toStation}`) || null;
   }
 
   /* ---------------------------------------------------------------- *
@@ -156,16 +316,19 @@ export class Simulation {
    */
   trainsAt(t, contexts) {
     const out = [];
+    const slack = this.offsetFor ? OFFSET_SLACK : 0;
+
     for (const ctx of contexts) {
       const deps = this.schedule.departures[ctx.service];
       if (!deps) continue;
       const local = t + ctx.offset;
 
-      // Only departures in (local - maxRuntime, local] can still be running.
-      const lo = lowerBoundPair(deps, local - this.maxRuntime);
+      // Only departures in (local - maxRuntime, local] can still be running,
+      // widened by the correction slack when observations are in play.
+      const lo = lowerBoundPair(deps, local - this.maxRuntime - slack);
       for (let k = lo; k < deps.length; k++) {
         const [pi, start] = deps[k];
-        if (start > local) break;
+        if (start > local + slack) break;
         const train = this.resolve(pi, start, local, ctx);
         if (train) out.push(train);
       }
@@ -176,17 +339,33 @@ export class Simulation {
   /** Materialise one train, or null if it isn't running at `local`. */
   resolve(pi, start, local, ctx) {
     const p = this.patterns[pi];
-    const rel = local - start;
-    if (rel < 0 || rel > this.endRel[pi]) return null;
+    const id = `${ctx.service}|${pi}|${start}`;
+
+    // A user-reported arrival shifts this run's whole timeline. offset < 0 means
+    // it is running ahead of the timetable, so it is further along than booked.
+    let adjust = 0;
+    let adjustKind = null;
+    if (this.offsetFor) {
+      const corr = this.offsetFor(id, p.line, Number(ctx.dirHint ?? p.dir));
+      if (corr) { adjust = corr.offset; adjustKind = corr.kind; }
+    }
+
+    const rel = local - start - adjust;
+    const tm = this.timing(pi);
+    if (rel < 0 || rel > tm.endRel) return null;
 
     const n = p.stops.length;
+    const ARR = tm.arr, DEP = tm.dep;
 
     // index of the last stop this train has already departed
-    let i = lowerBound(p.dep, rel);
-    if (i >= n || p.dep[i] > rel) i--;
+    let i = lowerBound(DEP, rel);
+    if (i >= n || DEP[i] > rel) i--;
     if (i < 0) i = 0;
 
     let status, fromIdx, nextIdx, km, speedKmh, etaNext, dwellLeft = 0, stopPos;
+    let restriction = null;
+    let restrictedNow = false;
+    let lateBy = tm.rdelay ? tm.rdelay[Math.min(i + 1, n - 1)] : 0;
 
     if (i >= n - 1) {
       // arrived at its final station
@@ -199,30 +378,51 @@ export class Simulation {
       stopPos = n - 1;
     } else {
       const j = i + 1;
-      if (rel < p.arr[j]) {
+      if (rel < ARR[j]) {
         // running between stop i and stop j
-        const t0 = p.dep[i], t1 = p.arr[j];
+        const t0 = DEP[i], t1 = ARR[j];
         const span = t1 - t0;
-        const tf = span > 0 ? (rel - t0) / span : 1;
         const d0 = p.dist[i], d1 = p.dist[j];
-        const df = distFraction(tf);
+        const elapsed = rel - t0;
+
+        restriction = this.restrictionFor(p.line, p.stops[i], p.stops[j]);
+        let legs = null;
+        if (restriction) {
+          const geom = this._restrictionKm(p, restriction);
+          if (geom) legs = buildLegs(d0, d1, span, restriction, geom.from, geom.to);
+        }
+
         status = 'moving';
         fromIdx = i;
         nextIdx = j;
-        km = d0 + (d1 - d0) * df;
-        speedKmh = span > 0 ? speedFraction(tf) * ((d1 - d0) / span) * 3600 : 0;
-        etaNext = t1 - rel;
-        stopPos = i + df;              // fractional stop index, for the strip map
+
+        if (legs) {
+          // piecewise: constant speed within each leg, so the crawl is visible
+          const leg = legs.legs.find((L) => elapsed < L.t1) || legs.legs[legs.legs.length - 1];
+          const legSpan = Math.max(1e-6, leg.t1 - leg.t0);
+          const f = Math.max(0, Math.min(1, (elapsed - leg.t0) / legSpan));
+          km = leg.d0 + (leg.d1 - leg.d0) * f;
+          speedKmh = ((leg.d1 - leg.d0) / legSpan) * 3600;
+          restrictedNow = leg.restricted;
+          etaNext = Math.max(0, t1 - rel);
+          stopPos = i + (km - d0) / Math.max(1e-9, d1 - d0);
+        } else {
+          const tf = span > 0 ? elapsed / span : 1;
+          const df = distFraction(tf);
+          km = d0 + (d1 - d0) * df;
+          speedKmh = span > 0 ? speedFraction(tf) * ((d1 - d0) / span) * 3600 : 0;
+          etaNext = t1 - rel;
+          stopPos = i + df;
+        }
       } else {
         // standing at stop j with its doors open
         fromIdx = j;
         km = p.dist[j];
         speedKmh = 0;
-        dwellLeft = Math.max(0, p.dep[j] - rel);
+        dwellLeft = Math.max(0, DEP[j] - rel);
         nextIdx = j + 1 < n ? j + 1 : null;
-        // standing at the last stop means the run is over, not a normal dwell
         status = nextIdx === null ? 'arrived' : 'dwelling';
-        etaNext = nextIdx !== null ? p.arr[nextIdx] - rel : 0;
+        etaNext = nextIdx !== null ? ARR[nextIdx] - rel : 0;
         stopPos = j;
       }
     }
@@ -231,12 +431,19 @@ export class Simulation {
     const pos = pointAtDistance(shape, km);
 
     return {
-      id: `${ctx.service}|${pi}|${start}`,
+      id,
       patternIdx: pi,
       start,
       startAbs: start - ctx.offset,     // in "today" seconds, for display
       service: ctx.service,
       dateKey: ctx.dateKey,             // the service day this run belongs to
+      // correction applied from user observations, if any
+      adjustSec: adjust,
+      adjustKind,                       // 'exact' | 'inferred' | null
+      // speed restriction state
+      restriction,
+      restrictedNow,
+      lateBy,
       line: p.line,
       dir: p.dir,
       color: this.lineById.get(p.line)?.color || '#888',
@@ -257,9 +464,9 @@ export class Simulation {
       stopPos,
       distKm: km,
       totalKm: p.dist[n - 1],
-      progress: p.runtime > 0 ? Math.min(1, rel / p.runtime) : 1,
+      progress: tm.runtime > 0 ? Math.min(1, rel / tm.runtime) : 1,
       rel,
-      runtime: p.runtime,
+      runtime: tm.runtime,
       lon: pos.lon,
       lat: pos.lat,
       bearing: pos.bearing,
@@ -267,18 +474,41 @@ export class Simulation {
     };
   }
 
+  /** Along-track km range of a restriction within a given pattern (cached). */
+  _restrictionKm(pattern, restriction) {
+    this._rKmCache ||= new Map();
+    const key = `${pattern.shape}|${restriction.id}`;
+    if (this._rKmCache.has(key)) return this._rKmCache.get(key);
+
+    const a = pattern.stops.indexOf(restriction.from);
+    const b = pattern.stops.indexOf(restriction.to);
+    const res = (a < 0 || b < 0)
+      ? null
+      : { from: Math.min(pattern.dist[a], pattern.dist[b]), to: Math.max(pattern.dist[a], pattern.dist[b]) };
+    this._rKmCache.set(key, res);
+    return res;
+  }
+
   /** Remaining (and recent) calls for a train, for the follow panel. */
   callsFor(train, limit = 40) {
     const p = this.patterns[train.patternIdx];
+    const tm = this.timing(train.patternIdx);
+    const shift = train.adjustSec || 0;
     const out = [];
     for (let i = 0; i < p.stops.length && out.length < limit; i++) {
       out.push({
         station: p.stops[i],
         name: this.stations[p.stops[i]]?.name || p.stops[i],
-        arr: train.startAbs + p.arr[i],
-        dep: train.startAbs + p.dep[i],
-        past: p.arr[i] < train.rel - 1,
+        // booked time, and the time actually being shown once restrictions and
+        // any user correction are applied
+        booked: train.startAbs + p.arr[i],
+        arr: train.startAbs + tm.arr[i] + shift,
+        dep: train.startAbs + tm.dep[i] + shift,
+        restrictionDelay: tm.rdelay ? tm.rdelay[i] : 0,
+        adjusted: shift !== 0 || (tm.rdelay ? tm.rdelay[i] > 0 : false),
+        past: tm.arr[i] < train.rel - 1,
         isNext: i === train.nextIdx,
+        idx: i,
       });
     }
     return out;
@@ -306,17 +536,28 @@ export class Simulation {
         const starts = byPat.get(pi);
         if (!starts) continue;
         const p = this.patterns[pi];
-        const offset = p.arr[si];
+        const tm = this.timing(pi);
+        const offset = tm.arr[si];
 
         // a call is upcoming when start + offset >= local (allow 30 s of slack
         // so a train sitting at the platform right now is still listed)
-        let idx = lowerBound(starts, local - offset - 30);
+        let idx = lowerBound(starts, local - offset - 30 - (this.offsetFor ? OFFSET_SLACK : 0));
         for (let c = 0; c < 4 && idx < starts.length; c++, idx++) {
           const start = starts[idx];
-          const arr = start + offset;
+          const trainId = `${ctx.service}|${pi}|${start}`;
+
+          // apply the same correction the map is using, so the board agrees
+          let shift = 0;
+          let shiftKind = null;
+          if (this.offsetFor) {
+            const corr = this.offsetFor(trainId, p.line, p.dir);
+            if (corr) { shift = corr.offset; shiftKind = corr.kind; }
+          }
+
+          const arr = start + offset + shift;
           if (arr < local - 30) { c--; continue; }
           rows.push({
-            trainId: `${ctx.service}|${pi}|${start}`,
+            trainId,
             patternIdx: pi,
             start,
             startAbs: start - ctx.offset,
@@ -329,7 +570,11 @@ export class Simulation {
             origin: p.stops[0],
             terminates: si === p.stops.length - 1,
             arrAbs: arr - ctx.offset,
-            depAbs: start + p.dep[si] - ctx.offset,
+            depAbs: start + tm.dep[si] + shift - ctx.offset,
+            bookedArrAbs: start + p.arr[si] - ctx.offset,
+            restrictionDelay: tm.rdelay ? tm.rdelay[si] : 0,
+            adjustSec: shift,
+            adjustKind: shiftKind,
             waitSec: arr - local,
             stopsToEnd: p.stops.length - 1 - si,
           });
@@ -396,9 +641,8 @@ export class Simulation {
     const deps = this.schedule.departures[service] || [];
     const prof = new Float32Array(1500); // minutes 0 .. 25 h, covers past-midnight
     for (const [pi, start] of deps) {
-      const p = this.patterns[pi];
       const a = Math.floor(start / 60);
-      const b = Math.ceil((start + p.runtime) / 60);
+      const b = Math.ceil((start + this.timing(pi).endRel) / 60);
       for (let m = a; m < b && m < prof.length; m++) prof[m]++;
     }
     let peak = 0;

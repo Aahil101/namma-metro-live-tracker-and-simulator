@@ -190,6 +190,20 @@ try {
   /* ---------------------- state of the running app --------------------- */
   console.log(`\n── live state ${'─'.repeat(38)}`);
 
+  // Pin the clock to evening peak. Namma Metro does not run between roughly
+  // 00:30 and 05:00, so a suite that relies on the wall clock fails every night
+  // for the wrong reason.
+  const pinned = await cdp.eval(`
+    const m = window.__metro;
+    m.state.live = false;
+    m.state.paused = false;
+    m.state.speed = 1;
+    m.state.simTime = 18 * 3600;
+    await new Promise(r => setTimeout(r, 600));
+    return { simTime: m.state.simTime, fleet: m.state.trainsById.size };
+  `);
+  console.log(`  clock pinned to 18:00 for determinism -> ${pinned.fleet} trains`);
+
   const snap = await cdp.eval(`
     const s = window.__metro.state;
     return {
@@ -218,7 +232,7 @@ try {
   console.log(`  styleLoaded=${snap.styleLoaded} mapLoaded=${snap.mapLoaded} sources=${snap.sources.length}`);
 
   ok(snap.service, 'a service is resolved', snap.svcBadge);
-  ok(/^\d\d:\d\d:\d\d$/.test(snap.clock), 'clock is rendering IST', snap.clock);
+  ok(/^\d\d:\d\d:\d\d$/.test(snap.clock), 'clock is rendering a time', snap.clock);
   ok(snap.trains > 10, 'a fleet of trains is live', `${snap.trains} trains`);
   ok(Number(snap.statTrains) > 10, 'header stat matches', snap.statTrains);
   ok(snap.rows > 10, 'train list is populated', `${snap.rows} rows`);
@@ -1041,8 +1055,8 @@ try {
   ok(signedOut.gate && signedOut.dashHidden, 'sign out returns to the gate');
 
 
-  /* ---------------------- shrink mode & folding ------------------------ */
-  console.log(`\n── shrink mode ${'─'.repeat(37)}`);
+  /* ------------------ maintenance & ground-truth corrections ----------- */
+  console.log(`\n── maintenance restriction ${'─'.repeat(25)}`);
 
   // the admin checks navigated away; come back to the map before testing its UI
   await cdp.send('Page.navigate', { url: URL_TO_TEST });
@@ -1052,7 +1066,149 @@ try {
       .catch(() => false);
     if (up) break;
   }
-  await cdp.eval(`localStorage.removeItem('nml.shrunk'); window.__metro.ui.setShrunk(false); return 'ok';`);
+  await cdp.eval(`
+    const m = window.__metro;
+    localStorage.removeItem('nml.shrunk');
+    m.ui.setShrunk(false);
+    m.state.live = false; m.state.paused = false; m.state.simTime = 18 * 3600;
+    await new Promise(r => setTimeout(r, 500));
+    return 'ok';
+  `);
+
+  const maint = await cdp.eval(`
+    const m = window.__metro;
+    const layers = m.metro.map.getStyle().layers.map(l => l.id);
+    const src = m.metro.map.getSource('maintenance');
+    const ser = src && src.serialize ? src.serialize() : null;
+    const data = (ser && ser.data) || src._data || { features: [] };
+
+    // find a Green Line train inside the restriction
+    m.state.simTime = 18 * 3600;
+    let hit = null, scanned = 0;
+    for (let t = 18 * 3600; t < 18 * 3600 + 1800 && !hit; t += 3) {
+      const trains = m.sim.trainsAt(t, [{ service: m.state.serviceId, offset: 0, dateKey: m.state.todayKey }]);
+      scanned++;
+      hit = trains.find(x => x.restrictedNow) || null;
+    }
+    const tm = hit ? m.sim.timing(hit.patternIdx) : null;
+    return {
+      layers: ['maint-black','maint-yellow','maint-label'].filter(id => layers.includes(id)),
+      sections: data.features.length,
+      label: data.features[0] ? data.features[0].properties.label : null,
+      dashBlack: m.metro.map.getPaintProperty('maint-black','line-dasharray'),
+      dashYellow: m.metro.map.getPaintProperty('maint-yellow','line-dasharray'),
+      found: !!hit,
+      speed: hit ? hit.speedKmh : null,
+      line: hit ? hit.line : null,
+      cap: hit ? hit.restriction.maxSpeedKmh : null,
+      delayed: tm ? tm.delayed : null,
+    };
+  `);
+  console.log(`  layers ${maint.layers.join(', ')} · ${maint.sections} section(s) · label "${maint.label}"`);
+  console.log(`  restricted train: ${maint.line} at ${maint.speed?.toFixed(1)} km/h (cap ${maint.cap}), run +${maint.delayed?.toFixed(0)}s`);
+  ok(maint.layers.length === 3, 'all three hazard layers exist', maint.layers.join(','));
+  ok(maint.sections === 1, 'one restricted section is drawn', `${maint.sections}`);
+  ok(/MAINTENANCE/.test(maint.label || ''), 'the section is labelled on the map', maint.label);
+  ok(/25/.test(maint.label || ''), 'the label carries the speed limit');
+  ok(JSON.stringify(maint.dashBlack) === '[2,2]' && JSON.stringify(maint.dashYellow) === '[0,2,2]',
+    'black and yellow dashes are complementary, so they alternate');
+  ok(maint.found, 'a train is found inside the restriction');
+  ok(maint.speed <= maint.cap + 0.5, 'its speed is capped at the limit', `${maint.speed?.toFixed(1)} <= ${maint.cap}`);
+  ok(maint.line === 'GREEN', 'the restriction applies to the Green Line', maint.line);
+  ok(maint.delayed > 30 && maint.delayed < 120, 'the run absorbs a plausible delay', `+${maint.delayed?.toFixed(0)}s`);
+
+  console.log(`\n── ground-truth corrections ${'─'.repeat(24)}`);
+
+  const correction = await cdp.eval(`
+    const m = window.__metro;
+    localStorage.removeItem('nml.observations');
+    m.ui.reloadCorrections();
+
+    m.state.simTime = 18 * 3600;
+    await new Promise(r => setTimeout(r, 400));
+
+    // pick a moving train with plenty of run left
+    const train = [...m.state.trainsById.values()]
+      .filter(t => t.status === 'moving' && t.nextIdx !== null && t.stopCount - t.nextIdx > 5)[0];
+    m.ui.selectTrain(train.id, false);
+    m.ui.updateTrainPanel(train);
+
+    const markText = document.getElementById('tp-mark-btn').textContent.replace(/\\s+/g,' ').trim();
+    const nextName = m.sim.stations[train.nextStation].name;
+    const before = { km: train.distKm, eta: train.etaNext };
+
+    // the user says it has already arrived at the next station, ~90s early
+    m.state.istSec = m.state.simTime;
+    m.ui.markArrivedNow();
+    await new Promise(r => setTimeout(r, 700));
+
+    const after = m.state.trainsById.get(train.id);
+    const strip = document.getElementById('correction-strip');
+    const adj = document.getElementById('tp-adjusted');
+    return {
+      markText, nextName,
+      hadButton: markText.toLowerCase().includes('already arrived'),
+      mentionsStation: markText.includes(nextName),
+      before,
+      afterKm: after ? after.distKm : null,
+      adjustSec: after ? after.adjustSec : null,
+      adjustKind: after ? after.adjustKind : null,
+      stripShown: !strip.hidden,
+      stripText: document.getElementById('cs-text').textContent,
+      adjShown: !adj.hidden,
+      adjText: adj.textContent.replace(/\\s+/g,' ').trim().slice(0, 150),
+      stored: JSON.parse(localStorage.getItem('nml.observations') || '[]').length,
+    };
+  `);
+  console.log(`  button: "${correction.markText}"`);
+  console.log(`  after marking: offset ${correction.adjustSec}s (${correction.adjustKind}), km ${correction.before.km.toFixed(2)} -> ${correction.afterKm?.toFixed(2)}`);
+  console.log(`  strip: "${correction.stripText}"`);
+  ok(correction.hadButton, 'the train panel offers "already arrived?"');
+  ok(correction.mentionsStation, 'the button names the next station', correction.nextName);
+  ok(correction.stored === 1, 'the observation is stored', `${correction.stored}`);
+  ok(correction.adjustSec !== 0 && correction.adjustSec !== null, 'the run is shifted', `${correction.adjustSec}s`);
+  ok(correction.adjustKind === 'exact', 'the shift is an exact, per-run correction', correction.adjustKind);
+  ok(correction.afterKm > correction.before.km, 'a train reported early is moved further along',
+    `${correction.before.km.toFixed(2)} -> ${correction.afterKm?.toFixed(2)} km`);
+  ok(correction.stripShown, 'a red strip warns the data is user-adjusted');
+  ok(/report/i.test(correction.stripText), 'the strip explains why', correction.stripText.slice(0, 60));
+  ok(correction.adjShown && /not the published timetable/i.test(correction.adjText),
+    'the panel states these are not published times');
+
+  // the correction must spread to other trains on the same line + direction
+  const spread = await cdp.eval(`
+    const m = window.__metro;
+    const obs = JSON.parse(localStorage.getItem('nml.observations'))[0];
+    const others = [...m.state.trainsById.values()]
+      .filter(t => t.line === obs.line && t.dir === obs.dir && t.id !== obs.trainId);
+    return {
+      line: obs.line, dir: obs.dir,
+      total: others.length,
+      inferred: others.filter(t => t.adjustKind === 'inferred').length,
+      exact: others.filter(t => t.adjustKind === 'exact').length,
+      untouched: [...m.state.trainsById.values()].filter(t => t.line !== obs.line && t.adjustSec).length,
+    };
+  `);
+  console.log(`  spread: ${spread.inferred}/${spread.total} other ${spread.line} dir${spread.dir} trains inferred`);
+  ok(spread.inferred === spread.total && spread.total > 0,
+    'other trains on that line and direction inherit an inferred shift', `${spread.inferred}/${spread.total}`);
+  ok(spread.untouched === 0, 'trains on other lines are left on the published timetable');
+
+  const reset = await cdp.eval(`
+    const m = window.__metro;
+    m.ui.resetCorrections();
+    await new Promise(r => setTimeout(r, 500));
+    return {
+      stored: JSON.parse(localStorage.getItem('nml.observations') || '[]').length,
+      stripHidden: document.getElementById('correction-strip').hidden,
+      anyAdjusted: [...m.state.trainsById.values()].filter(t => t.adjustSec).length,
+    };
+  `);
+  ok(reset.stored === 0 && reset.stripHidden && reset.anyAdjusted === 0,
+    'reset clears every correction and hides the strip');
+
+  /* ---------------------- shrink mode & folding ------------------------ */
+  console.log(`\n── shrink mode ${'─'.repeat(37)}`);
 
   const shrink = await cdp.eval(`
     const m = window.__metro;
@@ -1152,6 +1308,95 @@ try {
     return { hidden: box.hidden, hasApi: Boolean(window.__metro.state) && undefined === undefined };
   `);
   ok(lu.hidden, 'the "watching" pill stays hidden with no backend, rather than faking a number');
+
+  /* ------------------------ mobile layout ------------------------------ */
+  console.log(`\n── mobile layout (412x915) ${'─'.repeat(25)}`);
+
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 412, height: 915, deviceScaleFactor: 1, mobile: true,
+  });
+  await cdp.send('Page.navigate', { url: URL_TO_TEST });
+  for (let i = 0; i < 60; i++) {
+    await sleep(500);
+    const up = await cdp.eval(`return Boolean(window.__metro && window.__metro.metro && window.__metro.metro.ready);`)
+      .catch(() => false);
+    if (up) break;
+  }
+  await sleep(1500);
+
+  const mob = await cdp.eval(`
+    const vis = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') return null;
+      const r = el.getBoundingClientRect();
+      return { t: r.top, l: r.left, b: r.bottom, r: r.right, w: r.width, h: r.height };
+    };
+    const hits = (a, b) => a && b && !(a.r <= b.l + 1 || a.l >= b.r - 1 || a.b <= b.t + 1 || a.t >= b.b - 1);
+
+    const b = {
+      brand: vis('.brand'), clock: vis('.clockbox'), right: vis('.topbar-right'),
+      topbar: vis('.topbar'), sidebar: vis('#sidebar'), timebar: vis('.timebar'),
+    };
+    const clashes = [];
+    for (const [x, y] of [['brand','clock'], ['clock','right'], ['brand','right'],
+                          ['topbar','sidebar'], ['sidebar','timebar'], ['topbar','clock']]) {
+      if (x === 'topbar' && y === 'clock') continue;   // the clock lives inside the bar
+      if (hits(b[x], b[y])) clashes.push(x + '/' + y);
+    }
+
+    const overflow = [...document.querySelectorAll('.topbar *, .card, .freq-chip, .chip')]
+      .filter(el => { const r = el.getBoundingClientRect();
+                      return r.width > 0 && (r.right > window.innerWidth + 1 || r.left < -1); })
+      .map(el => (el.className || el.tagName).toString().slice(0, 30));
+
+    const cards = [...document.querySelectorAll('.card[data-collapsible]')].map(c => ({
+      title: c.querySelector('h2')?.textContent?.trim(),
+      folded: c.classList.contains('is-folded'),
+      visible: c.getBoundingClientRect().height > 10,
+      bodyHidden: getComputedStyle(c.querySelector('.card-body')).display === 'none',
+    }));
+
+    // tapping a header must expand it
+    const head = document.querySelector('.card[data-collapsible] .card-head');
+    head.click();
+    await new Promise(r => setTimeout(r, 250));
+    const afterTap = {
+      folded: head.closest('.card').classList.contains('is-folded'),
+      bodyShown: getComputedStyle(head.closest('.card').querySelector('.card-body')).display !== 'none',
+    };
+
+    const root = getComputedStyle(document.documentElement);
+    return {
+      clashes, overflow: [...new Set(overflow)].slice(0, 6), cards, afterTap,
+      topbarVar: root.getPropertyValue('--topbar-h').trim(),
+      timebarVar: root.getPropertyValue('--timebar-h').trim(),
+      topbarReal: Math.round(b.topbar.h),
+      timebarReal: Math.round(b.timebar.h),
+      mapArea: Math.round(((b.sidebar ? b.sidebar.t : window.innerHeight) - b.topbar.b) / window.innerHeight * 100),
+    };
+  `);
+
+  console.log(`  --topbar-h ${mob.topbarVar} (measured ${mob.topbarReal}px) · --timebar-h ${mob.timebarVar} (measured ${mob.timebarReal}px)`);
+  console.log(`  cards: ${mob.cards.map((c) => `${c.title}=${c.folded ? 'folded' : 'open'}`).join(', ')}`);
+  console.log(`  clear map height: ~${mob.mapArea}% of the viewport`);
+  if (mob.clashes.length) console.log(`  clashes: ${mob.clashes.join(', ')}`);
+  if (mob.overflow.length) console.log(`  overflowing: ${mob.overflow.join(' | ')}`);
+
+  ok(mob.clashes.length === 0, 'nothing overlaps on a phone-sized viewport');
+  ok(mob.overflow.length === 0, 'nothing overflows the phone viewport horizontally');
+  ok(parseInt(mob.topbarVar, 10) === mob.topbarReal,
+    '--topbar-h matches the measured bar', `${mob.topbarVar} vs ${mob.topbarReal}px`);
+  ok(Math.abs(parseInt(mob.timebarVar, 10) - (mob.timebarReal + 10)) <= 1,
+    '--timebar-h matches the measured bar', `${mob.timebarVar} vs ${mob.timebarReal}+10px`);
+  ok(mob.cards.length === 2 && mob.cards.every((c) => c.visible),
+    'both sidebar cards are reachable on a phone');
+  ok(mob.cards.every((c) => c.bodyHidden), 'both start folded so the map is in view');
+  ok(mob.mapArea > 55, 'the map gets the majority of the screen', `${mob.mapArea}%`);
+  ok(!mob.afterTap.folded && mob.afterTap.bodyShown, 'tapping a card header expands it');
+
+  await cdp.send('Emulation.clearDeviceMetricsOverride');
 
   /* -------------------------- console hygiene ------------------------- */
   console.log(`\n── console hygiene ${'─'.repeat(33)}`);

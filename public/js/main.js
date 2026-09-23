@@ -34,6 +34,8 @@ const state = {
   sort: 'line',
   filter: '',
   lines: new Set(),
+  corrections: null,
+  istSec: 0,
   theme: 'dark',
   shrunk: false,
   selectedStation: null,
@@ -96,9 +98,23 @@ async function boot() {
 
   const ui = new UI(sim, metro, state, meta);
   ui.setLive(true);
+  ui.observeChrome();
 
   // restore the user's shrink preference
   try { if (localStorage.getItem('nml.shrunk') === '1') ui.setShrunk(true); } catch { /* ignore */ }
+
+  // any arrival corrections recorded earlier still apply while they are fresh
+  ui.reloadCorrections();
+
+  // on a phone, start with the sidebar cards folded so the map is visible
+  if (window.matchMedia('(max-width: 900px)').matches) {
+    document.body.classList.add('mobile-first-load');
+    for (const card of document.querySelectorAll('.card[data-collapsible]')) {
+      card.classList.add('is-folded');
+      const b = card.querySelector('.card-fold');
+      if (b) { b.textContent = '+'; b.setAttribute('aria-expanded', 'false'); }
+    }
+  }
 
   // count this visit locally, and start polling the live viewer count if an API exists
   recordVisit();
@@ -155,6 +171,7 @@ async function boot() {
 
     const ist = istNow();
     if (ist.dateKey !== cachedDateKey) contexts = rebuildContexts(ist);
+    state.istSec = ist.sec;
 
     // ---- time source -------------------------------------------------
     let t;
